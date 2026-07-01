@@ -1,0 +1,39 @@
+# =========================
+# Backend
+# =========================
+backend/.venv/
+backend/venv/
+backend/.env
+backend/django_internal.sqlite3
+backend/db.sqlite3
+backend/media/
+backend/staticfiles/
+backend/__pycache__/
+backend/**/*.pyc
+
+# =========================
+# Frontend
+# =========================
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+frontend/.npm-cache/
+
+# =========================
+# Python
+# =========================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# =========================
+# VS Code
+# =========================
+.vscode/
+
+# =========================
+# OS Files
+# =========================
+.DS_Store
+Thumbs.db
