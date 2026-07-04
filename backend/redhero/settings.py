@@ -77,14 +77,23 @@ TIME_ZONE = "Asia/Kolkata"
 USE_I18N = True
 USE_TZ = True
 
+# -------------------------
+# Static & Media Files
+# -------------------------
 STATIC_URL = "static/"
+STATIC_ROOT = BASE_DIR / "staticfiles"
+
 MEDIA_URL = "/media/"
 MEDIA_ROOT = BASE_DIR / "media"
+
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 CORS_ALLOWED_ORIGINS = [
     origin.strip()
-    for origin in os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:5173,http://127.0.0.1:5173").split(",")
+    for origin in os.getenv(
+        "CORS_ALLOWED_ORIGINS",
+        "http://localhost:5173,http://127.0.0.1:5173"
+    ).split(",")
 ]
 CORS_ALLOW_CREDENTIALS = True
 
@@ -94,4 +103,5 @@ JWT_ACCESS_MINUTES = int(os.getenv("JWT_ACCESS_MINUTES", "120"))
 JWT_REFRESH_DAYS = int(os.getenv("JWT_REFRESH_DAYS", "7"))
 JWT_ACCESS_DELTA = timedelta(minutes=JWT_ACCESS_MINUTES)
 JWT_REFRESH_DELTA = timedelta(days=JWT_REFRESH_DAYS)
+
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
