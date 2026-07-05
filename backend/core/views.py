@@ -1,5 +1,6 @@
 import csv
 import io
+import logging
 import os
 from datetime import datetime
 
@@ -7,7 +8,7 @@ from django.conf import settings
 from django.http import HttpResponse
 from mongoengine.errors import NotUniqueError, ValidationError
 from rest_framework.decorators import api_view
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import ParseError, PermissionDenied
 from rest_framework.response import Response
 from rest_framework import status
 
@@ -46,6 +47,9 @@ from .serializers import (
     user_json,
 )
 from .services import next_code, parse_date
+
+
+logger = logging.getLogger(__name__)
 
 
 def ok(data=None, http_status=status.HTTP_200_OK):
@@ -134,20 +138,71 @@ def health(_request):
 
 @api_view(["POST"])
 def login(request):
-    email = request.data.get("email", "").lower().strip()
-    password = request.data.get("password", "")
+    try:
+        data = request.data
+    except ParseError as exc:
+        logger.warning(
+            "Login JSON parse failed: error=%s returned_response=%s",
+            str(exc),
+            {"status": status.HTTP_400_BAD_REQUEST, "detail": str(exc)},
+        )
+        raise
+
+    logger.warning(
+        "Login request JSON: %s",
+        {
+            "keys": list(data.keys()) if hasattr(data, "keys") else [],
+            "email": data.get("email") if hasattr(data, "get") else None,
+            "password_present": bool(data.get("password")) if hasattr(data, "get") else False,
+        },
+    )
+    email = data.get("email", "").lower().strip()
+    password = data.get("password", "")
+    logger.warning(
+        "Login validated data: %s",
+        {"email": email, "password_present": bool(password)},
+    )
     user = User.objects(email=email).first()
+    logger.warning(
+        "Login authentication lookup: %s",
+        {
+            "email": email,
+            "user_found": bool(user),
+            "approved": user.approved if user else None,
+            "is_active": user.is_active if user else None,
+            "role": user.role if user else None,
+        },
+    )
     if not user or not user.approved or not user.is_active:
+        logger.warning(
+            "Login returned response: %s",
+            {"status": status.HTTP_403_FORBIDDEN, "detail": "Access Denied - Contact Administrator"},
+        )
         return bad("Access Denied - Contact Administrator", status.HTTP_403_FORBIDDEN)
     if not verify_password(password, user.password_hash):
+        logger.warning(
+            "Login authentication result: %s",
+            {"email": email, "password_valid": False},
+        )
+        logger.warning(
+            "Login returned response: %s",
+            {"status": status.HTTP_401_UNAUTHORIZED, "detail": "Invalid email or password"},
+        )
         return bad("Invalid email or password", status.HTTP_401_UNAUTHORIZED)
-    return ok(
-        {
-            "access": create_token(user, "access"),
-            "refresh": create_token(user, "refresh"),
-            "user": user_json(user),
-        }
+    logger.warning(
+        "Login authentication result: %s",
+        {"email": email, "password_valid": True, "role": user.role},
     )
+    response = {
+        "access": create_token(user, "access"),
+        "refresh": create_token(user, "refresh"),
+        "user": user_json(user),
+    }
+    logger.warning(
+        "Login returned response: %s",
+        {"status": status.HTTP_200_OK, "user": response["user"], "access_present": True, "refresh_present": True},
+    )
+    return ok(response)
 
 
 @api_view(["GET"])
