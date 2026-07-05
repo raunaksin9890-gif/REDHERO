@@ -1,6 +1,6 @@
 import { Bell, Bot, BookOpen, CalendarCheck, ClipboardList, CreditCard, FileText, Gauge, GraduationCap, KeyRound, LogOut, Megaphone, Newspaper, PanelLeftClose, PanelLeftOpen, Trash2, Trophy, UsersRound, X, Menu } from "lucide-react";
-import { useMemo, useState } from "react";
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "./AuthProvider.jsx";
 
 const links = [
@@ -16,13 +16,34 @@ export function AppShell() {
   const [open, setOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
   const navigate = useNavigate();
+  const location = useLocation();
   const visibleLinks = links.filter((link) => link.roles.includes(user.role));
+
+  useEffect(() => {
+    setOpen(false);
+  }, [location.pathname]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    function closeOnEscape(event) {
+      if (event.key === "Escape") setOpen(false);
+    }
+    document.addEventListener("keydown", closeOnEscape);
+    return () => document.removeEventListener("keydown", closeOnEscape);
+  }, [open]);
+
+  function closeNavigation() {
+    setOpen(false);
+  }
+
   function signOut() {
+    closeNavigation();
     logout();
     navigate("/login", { replace: true });
   }
   return (
     <div className={`app-shell ${open ? "nav-open" : ""} ${collapsed ? "nav-collapsed" : ""}`}>
+      <div className="nav-backdrop" aria-hidden="true" onClick={closeNavigation} />
       <aside className="sidebar" aria-label="Primary navigation">
         <div className="sidebar-head">
           <div className="brand">
@@ -40,7 +61,7 @@ export function AppShell() {
           {visibleLinks.map((link) => {
             const Icon = link.icon;
             return (
-              <NavLink key={link.to} to={link.to} end={link.to === "/"}>
+              <NavLink key={link.to} to={link.to} end={link.to === "/"} onClick={closeNavigation}>
                 <Icon size={20} />
                 <span>{link.label}</span>
               </NavLink>
@@ -48,7 +69,7 @@ export function AppShell() {
           })}
         </nav>
         <div className="sidebar-actions">
-          <button className="logout" onClick={() => navigate("/change-password")}>
+          <button className="logout" onClick={() => { closeNavigation(); navigate("/change-password"); }}>
             <KeyRound size={18} />
             <span>Change password</span>
           </button>
