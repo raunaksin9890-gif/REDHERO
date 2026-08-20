@@ -540,7 +540,7 @@ def dashboard(request):
             "attendance_percentage": round((present / len(attendance)) * 100, 2) if attendance else 0,
             "marks": [marks_json(row) for row in marks[-5:]],
             "latest_notices": [notice_json(row) for row in notices],
-            "current_affairs": [simple_json(row, ["title", "summary", "category", "published_on"]) for row in CurrentAffair.objects.order_by("-published_on")[:4]],
+            "current_affairs": [simple_json(row, ["title", "summary", "category", "image_url", "published_on"]) for row in CurrentAffair.objects.order_by("-published_on")[:4]],
             "recent_videos": [simple_json(row, ["title", "class_level", "subject", "chapter", "youtube_url"]) for row in Video.objects(class_level=student.class_level).order_by("-created_at")[:4]],
         }
     )
@@ -977,7 +977,7 @@ def blogs(request):
 @api_view(["GET", "POST", "PUT", "DELETE"])
 def current_affairs(request):
     user = current_user(request)
-    fields = ["title", "summary", "content", "category", "source_url", "source_name", "generated_by_ai", "digest_date", "published_on"]
+    fields = ["title", "summary", "content", "category", "source_url", "source_name", "image_url", "generated_by_ai", "digest_date", "published_on"]
     if request.method == "GET":
         return ok({"results": [simple_json(row, fields) for row in CurrentAffair.objects.order_by("-published_on")]})
     require_roles(request, [ROLE_ADMIN])
@@ -995,6 +995,7 @@ def current_affairs(request):
             category=request.data.get("category", row.category),
             source_url=request.data.get("source_url", row.source_url),
             source_name=request.data.get("source_name", row.source_name),
+            image_url=request.data.get("image_url", row.image_url),
         )
         return ok({"item": simple_json(CurrentAffair.objects(id=row.id).first(), fields)})
     row = CurrentAffair(
@@ -1004,6 +1005,7 @@ def current_affairs(request):
         category=request.data.get("category", "Educational News"),
         source_url=request.data.get("source_url", ""),
         source_name=request.data.get("source_name", ""),
+        image_url=request.data.get("image_url", ""),
         created_by=user,
     ).save()
     notify_all_students(

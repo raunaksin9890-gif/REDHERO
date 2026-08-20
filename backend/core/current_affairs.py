@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 from email.utils import parsedate_to_datetime
 from html import unescape
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 from zoneinfo import ZoneInfo
 
 import requests
@@ -67,6 +67,7 @@ class SourceArticle:
     source_url: str
     source_name: str
     published_on: datetime
+    image_url: str = ""
 
 
 def can_run_daily_update(now=None):
@@ -88,6 +89,8 @@ def fetch_source_articles(limit=25, timeout=12):
             key = normalize_url(article.source_url)
             if not key or key in seen or not is_educational_article(article):
                 continue
+            if not article.image_url:
+                article.image_url = fetch_open_graph_image(article.source_url, timeout=min(timeout, 5))
             seen.add(key)
             articles.append(article)
             if len(articles) >= limit:
@@ -105,7 +108,8 @@ def parse_feed(xml_text, feed_url):
     articles = []
     for item in root.findall("./channel/item"):
         title = clean_text(text(item.find("title")))
-        summary = clean_text(text(item.find("description")))
+        raw_summary = text(item.find("description"))
+        summary = clean_text(raw_summary)
         source_node = item.find("{*}source")
         source_url = source_node.attrib.get("url", "") if source_node is not None else ""
         source_name = clean_text(source_node.text) if source_node is not None and source_node.text else channel_title
@@ -113,6 +117,7 @@ def parse_feed(xml_text, feed_url):
         url = link if is_valid_url(link) else source_url
         if not title or not is_valid_url(url):
             continue
+        image_url = extract_feed_image(item, raw_summary, url)
         articles.append(
             SourceArticle(
                 title=title,
@@ -120,6 +125,7 @@ def parse_feed(xml_text, feed_url):
                 source_url=url,
                 source_name=source_name or source_name_from_url(url),
                 published_on=parse_published_date(text(item.find("pubDate"))),
+                image_url=image_url,
             )
         )
     return articles
@@ -255,6 +261,7 @@ def save_current_affairs_digest(items, source_articles, created_by=None, dry_run
             category=normalize_category(item["category"]),
             source_url=source_key,
             source_name=source.source_name,
+            image_url=normalize_url(source.image_url),
             generated_by_ai=True,
             digest_date=today_ist,
             fetched_at=datetime.utcnow(),
@@ -332,6 +339,47 @@ def normalize_url(value):
         return ""
     parsed = urlparse(value.strip())
     return parsed._replace(fragment="").geturl()
+
+
+def extract_feed_image(item, summary, article_url):
+    candidates = []
+    for tag_name in ["{*}thumbnail", "{*}content"]:
+        for node in item.findall(tag_name):
+            candidates.append(node.attrib.get("url", ""))
+    enclosure = item.find("enclosure")
+    if enclosure is not None and str(enclosure.attrib.get("type", "")).startswith("image/"):
+        candidates.append(enclosure.attrib.get("url", ""))
+    candidates.extend(re.findall(r"<img[^>]+src=[\"']([^\"']+)[\"']", unescape(summary or ""), flags=re.IGNORECASE))
+    for candidate in candidates:
+        image_url = normalize_url(urljoin(article_url, clean_text(candidate)))
+        if image_url:
+            return image_url
+    return ""
+
+
+def fetch_open_graph_image(article_url, timeout=5):
+    if not is_valid_url(article_url):
+        return ""
+    try:
+        response = requests.get(article_url, timeout=timeout, headers={"User-Agent": "RedHeroCurrentAffairs/1.0"})
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        logger.debug("Current affairs image metadata fetch failed for %s: %s", article_url, exc)
+        return ""
+    html = response.text[:70000]
+    patterns = [
+        r"<meta[^>]+property=[\"']og:image(?::secure_url)?[\"'][^>]+content=[\"']([^\"']+)[\"']",
+        r"<meta[^>]+content=[\"']([^\"']+)[\"'][^>]+property=[\"']og:image(?::secure_url)?[\"']",
+        r"<meta[^>]+name=[\"']twitter:image[\"'][^>]+content=[\"']([^\"']+)[\"']",
+        r"<meta[^>]+content=[\"']([^\"']+)[\"'][^>]+name=[\"']twitter:image[\"']",
+    ]
+    for pattern in patterns:
+        match = re.search(pattern, html, flags=re.IGNORECASE)
+        if match:
+            image_url = normalize_url(urljoin(article_url, unescape(match.group(1).strip())))
+            if image_url:
+                return image_url
+    return ""
 
 
 def normalize_title(value):

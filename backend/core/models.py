@@ -169,6 +169,7 @@ class CurrentAffair(Document):
     category = StringField(default="Educational News")
     source_url = StringField(default="")
     source_name = StringField(default="")
+    image_url = StringField(default="")
     generated_by_ai = BooleanField(default=False)
     digest_date = StringField(default="")
     fetched_at = DateTimeField()
