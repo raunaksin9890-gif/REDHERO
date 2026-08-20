@@ -1,6 +1,7 @@
-import { Bell, Bot, BookOpen, CalendarCheck, ClipboardList, CreditCard, FileText, Gauge, GraduationCap, KeyRound, LogOut, Megaphone, Newspaper, PanelLeftClose, PanelLeftOpen, Trash2, Trophy, UsersRound, X, Menu } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { Bell, Bot, BookOpen, CalendarCheck, ClipboardList, CreditCard, FileText, Gauge, GraduationCap, KeyRound, LogOut, Megaphone, MessageCircle, Newspaper, PanelLeftClose, PanelLeftOpen, Target, Trash2, Trophy, UsersRound, X, Menu } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { api } from "../api/client.js";
 import { useAuth } from "./AuthProvider.jsx";
 
 const links = [
@@ -8,6 +9,7 @@ const links = [
   { to: "/directory", label: "People", icon: UsersRound, roles: ["super_admin", "teacher"] },
   { to: "/learning", label: "Learning", icon: BookOpen, roles: ["super_admin", "teacher", "student"] },
   { to: "/operations", label: "Operations", icon: ClipboardList, roles: ["super_admin", "teacher", "student"] },
+  { to: "/practice-progress", label: "Practice", icon: Target, roles: ["super_admin", "teacher", "student"] },
   { to: "/ai-tutor", label: "AI Tutor", icon: Bot, roles: ["student"] },
 ];
 
@@ -69,6 +71,12 @@ export function AppShell() {
           })}
         </nav>
         <div className="sidebar-actions">
+          {user.role === "student" && (
+            <button className="logout" onClick={() => { closeNavigation(); navigate("/contact-us"); }}>
+              <MessageCircle size={18} />
+              <span>Contact Us</span>
+            </button>
+          )}
           <button className="logout" onClick={() => { closeNavigation(); navigate("/change-password"); }}>
             <KeyRound size={18} />
             <span>Change password</span>
@@ -103,17 +111,70 @@ export function AppShell() {
 }
 
 function NotificationCenter({ user }) {
-  const seed = useMemo(() => notificationSeed(user.role), [user.role]);
-  const [items, setItems] = useState(seed);
+  const navigate = useNavigate();
+  const [items, setItems] = useState([]);
   const [open, setOpen] = useState(false);
   const unread = items.filter((item) => !item.read).length;
 
-  function markAllRead() {
+  const loadNotifications = useCallback(async () => {
+    try {
+      const data = await api("/notifications/");
+      setItems((data.results || []).map(mapNotification));
+    } catch {
+      setItems((current) => current);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadNotifications();
+    const poll = window.setInterval(loadNotifications, 45000);
+    function refreshOnFocus() {
+      if (!document.hidden) loadNotifications();
+    }
+    document.addEventListener("visibilitychange", refreshOnFocus);
+    return () => {
+      window.clearInterval(poll);
+      document.removeEventListener("visibilitychange", refreshOnFocus);
+    };
+  }, [loadNotifications, user.id]);
+
+  useEffect(() => {
+    if (open) loadNotifications();
+  }, [loadNotifications, open]);
+
+  async function markAllRead() {
+    const previous = items;
     setItems((current) => current.map((item) => ({ ...item, read: true })));
+    try {
+      await api("/notifications/mark-all-read/", { method: "POST" });
+    } catch {
+      setItems(previous);
+    }
   }
 
-  function remove(id) {
+  async function remove(id) {
+    const previous = items;
     setItems((current) => current.filter((item) => item.id !== id));
+    try {
+      await api(`/notifications/${id}/`, { method: "DELETE" });
+    } catch {
+      setItems(previous);
+    }
+  }
+
+  async function openNotification(item) {
+    if (!item.read) {
+      setItems((current) => current.map((entry) => entry.id === item.id ? { ...entry, read: true } : entry));
+      try {
+        await api(`/notifications/${item.id}/read/`, { method: "POST" });
+      } catch {
+        loadNotifications();
+      }
+    }
+    if (item.target_url) {
+      setOpen(false);
+      navigate(item.target_url);
+    }
   }
 
   const groups = [
@@ -145,14 +206,31 @@ function NotificationCenter({ user }) {
                   {groupItems.map((item) => {
                     const Icon = item.icon;
                     return (
-                      <article className={`notification-item ${item.read ? "read" : "unread"}`} key={item.id}>
+                      <article
+                        className={`notification-item ${item.read ? "read" : "unread"}`}
+                        key={item.id}
+                        role="button"
+                        tabIndex={0}
+                        onClick={() => openNotification(item)}
+                        onKeyDown={(event) => {
+                          if (event.key === "Enter" || event.key === " ") openNotification(item);
+                        }}
+                      >
                         <div className={`notification-icon ${item.tone}`}><Icon size={17} /></div>
                         <div>
                           <strong>{item.title}</strong>
                           <span>{item.message}</span>
                           <em>{item.time}</em>
                         </div>
-                        <button aria-label={`Delete ${item.title}`} onClick={() => remove(item.id)}><Trash2 size={15} /></button>
+                        <button
+                          aria-label={`Delete ${item.title}`}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            remove(item.id);
+                          }}
+                        >
+                          <Trash2 size={15} />
+                        </button>
                       </article>
                     );
                   })}
@@ -167,25 +245,57 @@ function NotificationCenter({ user }) {
   );
 }
 
-function notificationSeed(role) {
-  const common = [
-    { id: "notice-1", group: "Today", title: "Notice", message: "New announcement posted on the notice board.", time: "Now", icon: Megaphone, tone: "red", read: false },
-    { id: "learning-1", group: "Today", title: "Learning Content", message: "Fresh notes and videos are available in Learning.", time: "15 min ago", icon: FileText, tone: "blue", read: false },
-    { id: "blog-1", group: "Yesterday", title: "Blog", message: "A new study article is ready to read.", time: "Yesterday", icon: Newspaper, tone: "green", read: true },
-    { id: "current-1", group: "Older", title: "Current Affairs", message: "Weekly current affairs digest has been published.", time: "2 days ago", icon: Newspaper, tone: "violet", read: true },
-  ];
-  if (role === "student") {
-    return [
-      { id: "assignment-1", group: "Today", title: "Assignment", message: "A pending assignment needs your attention.", time: "5 min ago", icon: ClipboardList, tone: "red", read: false },
-      { id: "attendance-1", group: "Today", title: "Attendance", message: "Attendance summary updated for this month.", time: "1 hr ago", icon: CalendarCheck, tone: "green", read: false },
-      { id: "marks-1", group: "Yesterday", title: "Marks", message: "Recent assessment marks are available.", time: "Yesterday", icon: Trophy, tone: "blue", read: true },
-      { id: "fee-1", group: "Older", title: "Fee", message: "Fee structure is available in Operations.", time: "3 days ago", icon: CreditCard, tone: "amber", read: true },
-      ...common,
-    ];
-  }
-  return [
-    { id: "assignment-admin-1", group: "Today", title: "Assignment", message: "Assignment workflow is ready for updates.", time: "10 min ago", icon: ClipboardList, tone: "red", read: false },
-    { id: "marks-admin-1", group: "Yesterday", title: "Marks", message: "Marks records were recently updated.", time: "Yesterday", icon: Trophy, tone: "blue", read: true },
-    ...common,
-  ];
+const notificationIcons = {
+  assignment: ClipboardList,
+  attendance: CalendarCheck,
+  blog: Newspaper,
+  current_affairs: Newspaper,
+  fee: CreditCard,
+  learning: FileText,
+  marks: Trophy,
+  notice: Megaphone,
+  timetable: CalendarCheck,
+  video: FileText,
+  note: FileText,
+  bell: Bell,
+};
+
+function mapNotification(item) {
+  return {
+    id: item.id,
+    title: item.title,
+    message: item.message,
+    target_url: item.target_url,
+    tone: item.tone || "red",
+    icon: notificationIcons[item.icon] || notificationIcons[item.type] || Bell,
+    read: Boolean(item.read ?? item.is_read),
+    group: groupNotification(item.created_at),
+    time: timeAgo(item.created_at),
+  };
+}
+
+function groupNotification(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "Older";
+  const today = new Date();
+  const startToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const startYesterday = new Date(startToday);
+  startYesterday.setDate(startToday.getDate() - 1);
+  if (date >= startToday) return "Today";
+  if (date >= startYesterday) return "Yesterday";
+  return "Older";
+}
+
+function timeAgo(value) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const seconds = Math.max(1, Math.floor((Date.now() - date.getTime()) / 1000));
+  if (seconds < 60) return "Now";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} hr ago`;
+  const days = Math.floor(hours / 24);
+  if (days === 1) return "Yesterday";
+  return `${days} days ago`;
 }

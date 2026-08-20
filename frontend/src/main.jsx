@@ -13,6 +13,8 @@ const Directory = lazy(() => import("./pages/Directory.jsx").then((module) => ({
 const Learning = lazy(() => import("./pages/Learning.jsx").then((module) => ({ default: module.Learning })));
 const Operations = lazy(() => import("./pages/Operations.jsx").then((module) => ({ default: module.Operations })));
 const AiTutor = lazy(() => import("./pages/AiTutor.jsx").then((module) => ({ default: module.AiTutor })));
+const ContactUs = lazy(() => import("./pages/ContactUs.jsx").then((module) => ({ default: module.ContactUs })));
+const PracticeProgress = lazy(() => import("./pages/PracticeProgress.jsx").then((module) => ({ default: module.PracticeProgress })));
 
 function Protected({ children }) {
   const { user, loading } = useAuth();
@@ -46,7 +48,9 @@ function App() {
                 <Route path="learning/:sectionSlug" element={<Learning />} />
                 <Route path="learning/:sectionSlug/:itemId" element={<Learning />} />
                 <Route path="operations" element={<Operations />} />
+                <Route path="practice-progress" element={<PracticeProgress />} />
                 <Route path="ai-tutor" element={<AiTutor />} />
+                <Route path="contact-us" element={<ContactUs />} />
               </Route>
               <Route path="*" element={<RouteMessage code="404" title="Page not found" message="The page you opened is not available in this portal." />} />
             </Routes>

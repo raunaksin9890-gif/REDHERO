@@ -84,11 +84,61 @@ def notice_json(row):
     }
 
 
+def current_affair_json(row):
+    return {
+        "id": oid(row),
+        "title": row.title,
+        "summary": row.summary,
+        "content": getattr(row, "content", ""),
+        "category": row.category,
+        "source_url": getattr(row, "source_url", ""),
+        "source_name": getattr(row, "source_name", ""),
+        "generated_by_ai": getattr(row, "generated_by_ai", False),
+        "digest_date": getattr(row, "digest_date", ""),
+        "published_on": dt(row.published_on),
+        "created_at": dt(getattr(row, "published_on", None)),
+    }
+
+
+def notification_json(row):
+    return {
+        "id": oid(row),
+        "type": row.notification_type,
+        "title": row.title,
+        "message": row.message,
+        "target_url": row.target_url,
+        "tone": row.tone,
+        "icon": row.icon,
+        "related_object_id": row.related_object_id,
+        "is_read": row.is_read,
+        "read": row.is_read,
+        "dismissed": row.dismissed,
+        "created_at": dt(row.created_at),
+        "updated_at": dt(row.updated_at),
+    }
+
+
 def timetable_json(row):
     return {
         "id": oid(row),
         "class_level": row.class_level,
         "periods": [period.to_mongo().to_dict() for period in row.periods],
+    }
+
+
+def contact_message_json(row):
+    return {
+        "id": oid(row),
+        "student_id": row.student_id,
+        "name": row.name,
+        "email": row.email,
+        "issue_type": row.issue_type,
+        "message": row.message,
+        "rating": row.rating,
+        "feedback": row.feedback,
+        "status": row.status,
+        "created_at": dt(row.created_at),
+        "updated_at": dt(row.updated_at),
     }
 
 

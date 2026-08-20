@@ -374,6 +374,11 @@ function SelectedResource({ section, item, user, onSaved, setMessage }) {
         <div className="detail-section">
           <h3>Content</h3>
           <p>{item.content || item.summary || item.body || "No content available."}</p>
+          {section.key === "currentAffairs" && item.source_url && (
+            <a className="resource-action" href={item.source_url} target="_blank" rel="noopener noreferrer">
+              <ExternalLink size={17} /> Read Full Source →
+            </a>
+          )}
         </div>
       )}
 

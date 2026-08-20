@@ -1,4 +1,4 @@
-import { ArrowRight, BarChart3, Bookmark, BookOpen, CalendarCheck, ChartNoAxesCombined, Clapperboard, Clock3, Download, Eye, FileText, GraduationCap, Layers3, Megaphone, Newspaper, Play, Send, Sparkles, Trophy, UsersRound, X } from "lucide-react";
+import { ArrowRight, BarChart3, Bookmark, BookOpen, CalendarCheck, ChartNoAxesCombined, Clapperboard, Clock3, Download, Eye, FileText, GraduationCap, Layers3, Megaphone, Newspaper, Play, Send, Sparkles, Target, Trophy, UsersRound, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client.js";
@@ -285,6 +285,7 @@ function QuickActions() {
   const actions = [
     { to: "/learning", label: "Learning", icon: BookOpen },
     { to: "/operations", label: "Operations", icon: CalendarCheck },
+    { to: "/practice-progress", label: "Practice", icon: Target },
     { to: "/ai-tutor", label: "AI Tutor", icon: Sparkles },
     { to: "/operations", label: "Assignments", icon: Send },
     { to: "/operations", label: "Timetable", icon: Clock3 },

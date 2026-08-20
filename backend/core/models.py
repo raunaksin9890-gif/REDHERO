@@ -45,6 +45,26 @@ class User(Document):
     meta = {"collection": "Users", "indexes": ["email", "role"]}
 
 
+class Notification(Document):
+    recipient = ReferenceField(User, required=True, reverse_delete_rule=2)
+    notification_type = StringField(required=True)
+    title = StringField(required=True)
+    message = StringField(required=True)
+    target_url = StringField(default="")
+    tone = StringField(default="red")
+    icon = StringField(default="bell")
+    related_object_id = StringField(default="")
+    is_read = BooleanField(default=False)
+    dismissed = BooleanField(default=False)
+    created_at = DateTimeField(default=datetime.utcnow)
+    updated_at = DateTimeField(default=datetime.utcnow)
+
+    meta = {
+        "collection": "Notifications",
+        "indexes": ["recipient", "notification_type", "related_object_id", "is_read", "dismissed", "-created_at"],
+    }
+
+
 class Student(Document):
     user = ReferenceField(User, required=True, unique=True, reverse_delete_rule=2)
     student_id = StringField(required=True, unique=True)
@@ -145,11 +165,17 @@ class Blog(Document):
 class CurrentAffair(Document):
     title = StringField(required=True)
     summary = StringField(required=True)
+    content = StringField(default="")
     category = StringField(default="Educational News")
+    source_url = StringField(default="")
+    source_name = StringField(default="")
+    generated_by_ai = BooleanField(default=False)
+    digest_date = StringField(default="")
+    fetched_at = DateTimeField()
     published_on = DateTimeField(default=datetime.utcnow)
     created_by = ReferenceField(User, required=True)
 
-    meta = {"collection": "CurrentAffairs", "indexes": ["-published_on"]}
+    meta = {"collection": "CurrentAffairs", "indexes": ["source_url", "digest_date", "-published_on"]}
 
 
 class Video(Document):
@@ -197,6 +223,190 @@ class AssignmentSubmission(Document):
     submitted_at = DateTimeField(default=datetime.utcnow)
 
     meta = {"collection": "AssignmentSubmissions", "indexes": ["assignment", "student"]}
+
+
+class ExamQuestion(EmbeddedDocument):
+    question_id = StringField(required=True)
+    question_bank_id = StringField(default="")
+    text = StringField(required=True)
+    question_type = StringField(required=True, choices=["mcq", "true_false", "short", "long"])
+    marks = FloatField(required=True, min_value=0)
+    options = ListField(StringField(), default=list)
+    correct_answer = StringField(default="")
+    expected_answer = StringField(default="")
+    explanation = StringField(default="")
+    chapter = StringField(default="")
+    difficulty = StringField(default="Medium", choices=["Easy", "Medium", "Hard"])
+    order = IntField(default=0)
+
+
+class Exam(Document):
+    name = StringField(required=True)
+    class_level = StringField(required=True, choices=CLASSES)
+    subject = StringField(required=True)
+    instructions = StringField(default="")
+    exam_date = DateTimeField(required=True)
+    start_time = DateTimeField(required=True)
+    end_time = DateTimeField(required=True)
+    duration_minutes = IntField(required=True, min_value=1)
+    total_marks = FloatField(required=True, min_value=0)
+    passing_marks = FloatField(default=0)
+    is_published = BooleanField(default=False)
+    result_published = BooleanField(default=False)
+    questions = EmbeddedDocumentListField(ExamQuestion, default=list)
+    created_by = ReferenceField(User, required=True)
+    created_at = DateTimeField(default=datetime.utcnow)
+    updated_at = DateTimeField(default=datetime.utcnow)
+
+    meta = {"collection": "Exams", "indexes": ["class_level", "subject", "is_published", "result_published", "start_time", "end_time"]}
+
+
+class ExamAnswer(EmbeddedDocument):
+    question_id = StringField(required=True)
+    answer = StringField(default="")
+    marks_awarded = FloatField(default=0)
+    feedback = StringField(default="")
+    auto_graded = BooleanField(default=False)
+    evaluated = BooleanField(default=False)
+
+
+class ExamAttempt(Document):
+    exam = ReferenceField(Exam, required=True, reverse_delete_rule=2)
+    student = ReferenceField(Student, required=True, reverse_delete_rule=2)
+    started_at = DateTimeField(required=True)
+    deadline = DateTimeField(required=True)
+    submitted_at = DateTimeField()
+    status = StringField(default="in_progress", choices=["in_progress", "submitted", "expired", "evaluated"])
+    answers = EmbeddedDocumentListField(ExamAnswer, default=list)
+    objective_score = FloatField(default=0)
+    descriptive_score = FloatField(default=0)
+    score = FloatField(default=0)
+    feedback = StringField(default="")
+    evaluated_by = ReferenceField(User)
+    evaluated_at = DateTimeField()
+    updated_at = DateTimeField(default=datetime.utcnow)
+
+    meta = {"collection": "ExamAttempts", "indexes": ["exam", "student", "status", "deadline"]}
+
+
+class QuestionBankQuestion(Document):
+    class_level = StringField(required=True, choices=CLASSES)
+    subject = StringField(required=True)
+    chapter = StringField(required=True)
+    question_type = StringField(required=True, choices=["mcq", "true_false", "short", "long"])
+    difficulty = StringField(default="Medium", choices=["Easy", "Medium", "Hard"])
+    text = StringField(required=True)
+    options = ListField(StringField(), default=list)
+    correct_answer = StringField(default="")
+    expected_answer = StringField(default="")
+    explanation = StringField(default="")
+    marks = FloatField(default=1, min_value=0)
+    created_by = ReferenceField(User, required=True)
+    created_at = DateTimeField(default=datetime.utcnow)
+    updated_at = DateTimeField(default=datetime.utcnow)
+
+    meta = {
+        "collection": "QuestionBankQuestions",
+        "indexes": ["class_level", "subject", "chapter", "difficulty", "question_type", "created_by", "-created_at"],
+    }
+
+
+class PracticeAnswer(EmbeddedDocument):
+    question = ReferenceField(QuestionBankQuestion)
+    answer = StringField(default="")
+    correct = BooleanField(default=False)
+    marks_awarded = FloatField(default=0)
+    answered_at = DateTimeField()
+
+
+class PracticeSession(Document):
+    student = ReferenceField(Student, required=True, reverse_delete_rule=2)
+    session_type = StringField(default="daily", choices=["daily", "mistakes"])
+    session_date = StringField(required=True)
+    class_level = StringField(required=True, choices=CLASSES)
+    subject = StringField(default="")
+    status = StringField(default="in_progress", choices=["in_progress", "submitted"])
+    questions = ListField(ReferenceField(QuestionBankQuestion), default=list)
+    answers = EmbeddedDocumentListField(PracticeAnswer, default=list)
+    total_questions = IntField(default=0)
+    correct_count = IntField(default=0)
+    incorrect_count = IntField(default=0)
+    score = FloatField(default=0)
+    accuracy = FloatField(default=0)
+    topic_performance = ListField(DictField(), default=list)
+    started_at = DateTimeField(default=datetime.utcnow)
+    submitted_at = DateTimeField()
+    updated_at = DateTimeField(default=datetime.utcnow)
+
+    meta = {"collection": "PracticeSessions", "indexes": ["student", "session_date", "session_type", "status", "-started_at"]}
+
+
+class StudentMistake(Document):
+    student = ReferenceField(Student, required=True, reverse_delete_rule=2)
+    question = ReferenceField(QuestionBankQuestion, required=True, reverse_delete_rule=2)
+    source = StringField(default="practice", choices=["practice", "exam"])
+    subject = StringField(required=True)
+    chapter = StringField(required=True)
+    wrong_attempts = IntField(default=0)
+    correct_streak = IntField(default=0)
+    resolved = BooleanField(default=False)
+    last_wrong_at = DateTimeField()
+    updated_at = DateTimeField(default=datetime.utcnow)
+
+    meta = {"collection": "StudentMistakes", "indexes": ["student", "question", "subject", "chapter", "resolved", "-last_wrong_at"]}
+
+
+class TopicPerformance(Document):
+    student = ReferenceField(Student, required=True, reverse_delete_rule=2)
+    class_level = StringField(required=True, choices=CLASSES)
+    subject = StringField(required=True)
+    chapter = StringField(required=True)
+    attempts = IntField(default=0)
+    correct = IntField(default=0)
+    accuracy = FloatField(default=0)
+    status = StringField(default="Needs Practice", choices=["Strong", "Needs Practice", "Weak"])
+    updated_at = DateTimeField(default=datetime.utcnow)
+
+    meta = {"collection": "TopicPerformance", "indexes": ["student", "class_level", "subject", "chapter", "status", "-updated_at"]}
+
+
+class StudyPlanTask(EmbeddedDocument):
+    task_id = StringField(required=True)
+    title = StringField(required=True)
+    category = StringField(default="Practice")
+    subject = StringField(default="")
+    chapter = StringField(default="")
+    minutes = IntField(default=20)
+    link = StringField(default="")
+    completed = BooleanField(default=False)
+    completed_at = DateTimeField()
+
+
+class StudyPlan(Document):
+    student = ReferenceField(Student, required=True, reverse_delete_rule=2)
+    plan_date = StringField(required=True)
+    tasks = EmbeddedDocumentListField(StudyPlanTask, default=list)
+    created_at = DateTimeField(default=datetime.utcnow)
+    updated_at = DateTimeField(default=datetime.utcnow)
+
+    meta = {"collection": "StudyPlans", "indexes": ["student", "plan_date", "-updated_at"]}
+
+
+class ContactMessage(Document):
+    user = ReferenceField(User, required=True, reverse_delete_rule=2)
+    student = ReferenceField(Student, required=True, reverse_delete_rule=2)
+    student_id = StringField(required=True)
+    name = StringField(required=True)
+    email = EmailField(required=True)
+    issue_type = StringField(required=True, choices=["Login Issue", "Learning Issue", "Operations Issue", "AI Tutor Issue", "Technical Issue", "Feedback", "Other"])
+    message = StringField(required=True, max_length=2000)
+    rating = IntField(min_value=1, max_value=5)
+    feedback = StringField(default="", max_length=1000)
+    status = StringField(default="New", choices=["New", "In Review", "Resolved"])
+    created_at = DateTimeField(default=datetime.utcnow)
+    updated_at = DateTimeField(default=datetime.utcnow)
+
+    meta = {"collection": "ContactMessages", "indexes": ["student", "student_id", "status", "-created_at"]}
 
 
 class ChatMessage(EmbeddedDocument):

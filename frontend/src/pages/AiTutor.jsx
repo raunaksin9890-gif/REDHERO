@@ -7,6 +7,16 @@ import remarkMath from "remark-math";
 import "katex/dist/katex.min.css";
 import { api } from "../api/client.js";
 
+const AI_USAGE_LIMIT_MESSAGE = "Your AI usage limit has been reached. Please try again later.";
+const AI_TEMPORARY_FAILURE_MESSAGE = "AI service is temporarily unavailable. Please try again later.";
+
+function safeAiErrorMessage(error) {
+  const text = String(error?.message || error || "").toLowerCase();
+  const usageLimitMarkers = ["429", "503", "resource_exhausted", "unavailable", "quota", "rate limit", "model overloaded", "overloaded", "high demand"];
+  if (usageLimitMarkers.some((marker) => text.includes(marker))) return AI_USAGE_LIMIT_MESSAGE;
+  return AI_TEMPORARY_FAILURE_MESSAGE;
+}
+
 function MarkdownMessage({ content }) {
   return (
     <ReactMarkdown
@@ -44,7 +54,7 @@ export function AiTutor() {
       const result = await api("/ai/chat/", { method: "POST", body: JSON.stringify({ subject, message: question }) });
       setChat((items) => [...items, { role: "assistant", content: result.chat.answer }]);
     } catch (err) {
-      setChat((items) => [...items, { role: "assistant", content: err.message }]);
+      setChat((items) => [...items, { role: "assistant", content: safeAiErrorMessage(err) }]);
     } finally {
       setBusy(false);
     }

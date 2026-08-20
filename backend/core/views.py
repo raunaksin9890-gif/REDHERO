@@ -2,8 +2,9 @@ import csv
 import io
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
+import jwt
 from django.conf import settings
 from django.http import HttpResponse
 from mongoengine.errors import NotUniqueError, ValidationError
@@ -23,11 +24,13 @@ from .models import (
     Blog,
     ChatHistory,
     ChatMessage,
+    ContactMessage,
     CurrentAffair,
     Fee,
     Marks,
     Note,
     Notice,
+    Notification,
     Student,
     Teacher,
     Timetable,
@@ -35,10 +38,13 @@ from .models import (
     User,
     Video,
 )
+from .notifications import notify_all_students, notify_student, notify_students_for_class
 from .security import create_token, current_user, hash_password, require_roles, verify_password
 from .serializers import (
     attendance_json,
+    contact_message_json,
     marks_json,
+    notification_json,
     notice_json,
     simple_json,
     student_json,
@@ -50,6 +56,9 @@ from .services import next_code, parse_date
 
 
 logger = logging.getLogger(__name__)
+FORGOT_PASSWORD_VERIFY_ERROR = "Unable to verify the provided account details."
+FORGOT_PASSWORD_TOKEN_MINUTES = 15
+FORGOT_PASSWORD_ATTEMPTS = {}
 
 
 def ok(data=None, http_status=status.HTTP_200_OK):
@@ -58,6 +67,48 @@ def ok(data=None, http_status=status.HTTP_200_OK):
 
 def bad(message, http_status=status.HTTP_400_BAD_REQUEST):
     return Response({"detail": message}, status=http_status)
+
+
+def client_key(request, suffix=""):
+    forwarded = request.META.get("HTTP_X_FORWARDED_FOR", "")
+    ip = forwarded.split(",", 1)[0].strip() if forwarded else request.META.get("REMOTE_ADDR", "unknown")
+    return f"{ip}:{suffix}".lower()
+
+
+def too_many_forgot_attempts(request, suffix):
+    key = client_key(request, suffix)
+    now = datetime.utcnow()
+    attempts = [stamp for stamp in FORGOT_PASSWORD_ATTEMPTS.get(key, []) if now - stamp < timedelta(minutes=15)]
+    FORGOT_PASSWORD_ATTEMPTS[key] = attempts
+    return len(attempts) >= 5
+
+
+def record_forgot_attempt(request, suffix):
+    key = client_key(request, suffix)
+    FORGOT_PASSWORD_ATTEMPTS.setdefault(key, []).append(datetime.utcnow())
+
+
+def create_forgot_password_token(user):
+    now = datetime.now(timezone.utc)
+    payload = {
+        "sub": str(user.id),
+        "type": "forgot_password",
+        "iat": int(now.timestamp()),
+        "exp": int((now + timedelta(minutes=FORGOT_PASSWORD_TOKEN_MINUTES)).timestamp()),
+    }
+    return jwt.encode(payload, settings.JWT_SECRET, algorithm=settings.JWT_ALGORITHM)
+
+
+def decode_forgot_password_token(token):
+    try:
+        payload = jwt.decode(token, settings.JWT_SECRET, algorithms=[settings.JWT_ALGORITHM])
+    except jwt.ExpiredSignatureError:
+        return None
+    except jwt.InvalidTokenError:
+        return None
+    if payload.get("type") != "forgot_password":
+        return None
+    return payload
 
 
 def get_student_for_user(user):
@@ -236,6 +287,52 @@ def change_password(request):
         updated_at=datetime.utcnow(),
     )
     return ok({"message": "Password changed successfully"})
+
+
+@api_view(["POST"])
+def forgot_password_verify(request):
+    data = request.data
+    username = data.get("username", "").strip()
+    roll_number = str(data.get("roll_number", "")).strip()
+    class_level = str(data.get("class_level", "")).strip()
+    student_id = data.get("student_id", "").strip().upper()
+    suffix = f"{username}:{student_id}"
+    if too_many_forgot_attempts(request, suffix):
+        return bad(FORGOT_PASSWORD_VERIFY_ERROR, status.HTTP_429_TOO_MANY_REQUESTS)
+    student = Student.objects(student_id=student_id, roll_number=roll_number, class_level=class_level).first()
+    user = student.user if student else None
+    username_key = username.lower()
+    matches_username = bool(user and username_key in {user.email.lower(), user.name.lower()})
+    if not student or not user or user.role != ROLE_STUDENT or not matches_username:
+        record_forgot_attempt(request, suffix)
+        return bad(FORGOT_PASSWORD_VERIFY_ERROR)
+    return ok({"reset_token": create_forgot_password_token(user), "message": "Account verified."})
+
+
+@api_view(["POST"])
+def forgot_password_reset(request):
+    data = request.data
+    token = data.get("reset_token", "")
+    new_password = data.get("new_password", "")
+    confirm_password = data.get("confirm_password", "")
+    if new_password != confirm_password:
+        return bad("Passwords do not match.")
+    strength_error = validate_password_strength(new_password)
+    if strength_error:
+        return bad(strength_error)
+    payload = decode_forgot_password_token(token)
+    if not payload:
+        return bad(FORGOT_PASSWORD_VERIFY_ERROR)
+    target = User.objects(id=payload["sub"], role=ROLE_STUDENT, is_active=True).first()
+    if not target:
+        return bad(FORGOT_PASSWORD_VERIFY_ERROR)
+    target.update(
+        password_hash=hash_password(new_password),
+        first_login=False,
+        force_password_change=False,
+        updated_at=datetime.utcnow(),
+    )
+    return ok({"message": "Password changed successfully. You can now sign in with your new password."})
 
 
 @api_view(["POST"])
@@ -473,7 +570,18 @@ def attendance(request):
             return ok({"message": "Attendance deleted"})
         status_value = request.data.get("status", row.status)
         row.update(status=status_value, marked_by=user, updated_at=datetime.utcnow())
-        return ok({"attendance": attendance_json(Attendance.objects(id=row.id).first())})
+        updated = Attendance.objects(id=row.id).first()
+        notify_student(
+            updated.student,
+            "attendance",
+            "Attendance",
+            f"Your attendance for {updated.date.strftime('%d %b %Y')} was updated.",
+            "/operations",
+            "green",
+            "attendance",
+            updated.id,
+        )
+        return ok({"attendance": attendance_json(updated)})
     data = request.data
     student = Student.objects(id=data.get("student")).first()
     if not student:
@@ -488,6 +596,16 @@ def attendance(request):
         set__marked_by=user,
         set__updated_at=now,
         set_on_insert__created_at=now,
+    )
+    notify_student(
+        row.student,
+        "attendance",
+        "Attendance",
+        f"Your attendance for {row.date.strftime('%d %b %Y')} was marked.",
+        "/operations",
+        "green",
+        "attendance",
+        row.id,
     )
     return ok({"message": "Attendance marked", "attendance": attendance_json(row)}, status.HTTP_201_CREATED)
 
@@ -536,7 +654,18 @@ def marks(request):
             max_marks=float(data.get("max_marks", row.max_marks)),
             added_by=user,
         )
-        return ok({"marks": marks_json(Marks.objects(id=row.id).first())})
+        updated = Marks.objects(id=row.id).first()
+        notify_student(
+            updated.student,
+            "marks",
+            "Marks",
+            f"{updated.subject} {updated.exam_type} marks are available.",
+            "/operations",
+            "blue",
+            "marks",
+            updated.id,
+        )
+        return ok({"marks": marks_json(updated)})
     data = request.data
     student = Student.objects(id=data.get("student")).first()
     if not student:
@@ -551,6 +680,16 @@ def marks(request):
         max_marks=float(data.get("max_marks")),
         added_by=user,
     ).save()
+    notify_student(
+        row.student,
+        "marks",
+        "Marks",
+        f"{row.subject} {row.exam_type} marks are available.",
+        "/operations",
+        "blue",
+        "marks",
+        row.id,
+    )
     return ok({"marks": marks_json(row)}, status.HTTP_201_CREATED)
 
 
@@ -595,6 +734,16 @@ def notices(request):
     data = request.data
     enforce_teacher_class(user, str(data.get("class_level", "all")))
     row = Notice(title=data.get("title"), body=data.get("body"), class_level=str(data.get("class_level", "all")), created_by=user).save()
+    notify_students_for_class(
+        row.class_level,
+        "notice",
+        "Notice",
+        row.title,
+        "/learning",
+        "red",
+        "notice",
+        row.id,
+    )
     return ok({"notice": notice_json(row)}, status.HTTP_201_CREATED)
 
 
@@ -618,6 +767,16 @@ def timetables(request):
     data = request.data
     periods = [TimetablePeriod(**period) for period in data.get("periods", [])]
     row = Timetable.objects(class_level=str(data.get("class_level"))).modify(upsert=True, new=True, set__periods=periods, set__updated_at=datetime.utcnow())
+    notify_students_for_class(
+        row.class_level,
+        "timetable",
+        "Timetable",
+        "Your class timetable has been updated.",
+        "/operations",
+        "amber",
+        "timetable",
+        row.id,
+    )
     return ok({"timetable": timetable_json(row)})
 
 
@@ -646,7 +805,74 @@ def fees(request):
         set__installments=data.get("installments", {}),
         set__updated_at=datetime.utcnow(),
     )
+    notify_students_for_class(
+        row.class_level,
+        "fee",
+        "Fee",
+        "Fee structure has been updated.",
+        "/operations",
+        "amber",
+        "fee",
+        row.id,
+    )
     return ok({"fee": simple_json(row, ["class_level", "annual_fee", "installments", "updated_at"])})
+
+
+CONTACT_ISSUE_TYPES = ["Login Issue", "Learning Issue", "Operations Issue", "AI Tutor Issue", "Technical Issue", "Feedback", "Other"]
+CONTACT_STATUSES = ["New", "In Review", "Resolved"]
+CONTACT_ERROR = "Unable to send your message right now. Please try again later."
+
+
+@api_view(["GET", "POST", "PUT"])
+def contact_messages(request):
+    user = require_roles(request, [ROLE_ADMIN, ROLE_STUDENT])
+    if request.method == "GET":
+        if user.role == ROLE_ADMIN:
+            rows = ContactMessage.objects.order_by("-created_at")
+        else:
+            student = get_student_for_user(user)
+            rows = ContactMessage.objects(student=student).order_by("-created_at")
+        return ok({"results": [contact_message_json(row) for row in rows]})
+
+    if request.method == "PUT":
+        require_roles(request, [ROLE_ADMIN])
+        row = ContactMessage.objects(id=request.data.get("id")).first()
+        if not row:
+            return bad("Contact message not found", status.HTTP_404_NOT_FOUND)
+        status_value = request.data.get("status", row.status)
+        if status_value not in CONTACT_STATUSES:
+            return bad("Invalid status")
+        row.update(status=status_value, updated_at=datetime.utcnow())
+        return ok({"message": contact_message_json(ContactMessage.objects(id=row.id).first())})
+
+    student = get_student_for_user(user)
+    if not student:
+        return bad(CONTACT_ERROR, status.HTTP_400_BAD_REQUEST)
+    recent_cutoff = datetime.utcnow() - timedelta(minutes=10)
+    if ContactMessage.objects(student=student, created_at__gte=recent_cutoff).count() >= 3:
+        return bad(CONTACT_ERROR, status.HTTP_429_TOO_MANY_REQUESTS)
+    issue_type = request.data.get("issue_type", "")
+    message = request.data.get("message", "").strip()
+    email = (request.data.get("email") or student.email or user.email).lower().strip()
+    if issue_type not in CONTACT_ISSUE_TYPES or not message or len(message) > 2000:
+        return bad(CONTACT_ERROR)
+    try:
+        rating = request.data.get("rating") or None
+        row = ContactMessage(
+            user=user,
+            student=student,
+            student_id=student.student_id,
+            name=(request.data.get("name") or student.name).strip(),
+            email=email,
+            issue_type=issue_type,
+            message=message,
+            rating=int(rating) if rating else None,
+            feedback=request.data.get("feedback", "").strip()[:1000],
+        ).save()
+    except (TypeError, ValueError, ValidationError) as exc:
+        logger.warning("Contact message validation failed: %s", exc)
+        return bad(CONTACT_ERROR)
+    return ok({"message": "Your message has been sent successfully.", "contact": contact_message_json(row)}, status.HTTP_201_CREATED)
 
 
 def content_view(model, fields):
@@ -683,6 +909,28 @@ def content_view(model, fields):
         else:
             payload["author" if model == Blog else "created_by"] = user
         row = model(**payload).save()
+        if model == Video:
+            notify_students_for_class(
+                row.class_level,
+                "video",
+                "Learning Content",
+                f"New video lecture added: {row.title}",
+                "/learning",
+                "blue",
+                "learning",
+                row.id,
+            )
+        elif model == Note:
+            notify_students_for_class(
+                row.class_level,
+                "note",
+                "Learning Content",
+                f"New study note added: {row.title}",
+                "/learning",
+                "blue",
+                "learning",
+                row.id,
+            )
         return ok({"item": simple_json(row, fields)}, status.HTTP_201_CREATED)
 
     return handler
@@ -713,14 +961,25 @@ def blogs(request):
         )
         return ok({"item": simple_json(Blog.objects(id=row.id).first(), ["title", "category", "content", "published", "created_at"])})
     row = Blog(title=request.data.get("title"), category=request.data.get("category"), content=request.data.get("content"), published=request.data.get("published", True), author=user).save()
+    if row.published:
+        notify_all_students(
+            "blog",
+            "Blog",
+            f"New study article published: {row.title}",
+            "/learning",
+            "green",
+            "blog",
+            row.id,
+        )
     return ok({"item": simple_json(row, ["title", "category", "content", "published", "created_at"])}, status.HTTP_201_CREATED)
 
 
 @api_view(["GET", "POST", "PUT", "DELETE"])
 def current_affairs(request):
     user = current_user(request)
+    fields = ["title", "summary", "content", "category", "source_url", "source_name", "generated_by_ai", "digest_date", "published_on"]
     if request.method == "GET":
-        return ok({"results": [simple_json(row, ["title", "summary", "category", "published_on"]) for row in CurrentAffair.objects.order_by("-published_on")]})
+        return ok({"results": [simple_json(row, fields) for row in CurrentAffair.objects.order_by("-published_on")]})
     require_roles(request, [ROLE_ADMIN])
     if request.method in ["PUT", "DELETE"]:
         row = CurrentAffair.objects(id=request.data.get("id") or request.GET.get("id")).first()
@@ -732,18 +991,56 @@ def current_affairs(request):
         row.update(
             title=request.data.get("title", row.title),
             summary=request.data.get("summary", row.summary),
+            content=request.data.get("content", row.content),
             category=request.data.get("category", row.category),
+            source_url=request.data.get("source_url", row.source_url),
+            source_name=request.data.get("source_name", row.source_name),
         )
-        return ok({"item": simple_json(CurrentAffair.objects(id=row.id).first(), ["title", "summary", "category", "published_on"])})
-    row = CurrentAffair(title=request.data.get("title"), summary=request.data.get("summary"), category=request.data.get("category", "Educational News"), created_by=user).save()
-    return ok({"item": simple_json(row, ["title", "summary", "category", "published_on"])}, status.HTTP_201_CREATED)
+        return ok({"item": simple_json(CurrentAffair.objects(id=row.id).first(), fields)})
+    row = CurrentAffair(
+        title=request.data.get("title"),
+        summary=request.data.get("summary"),
+        content=request.data.get("content", ""),
+        category=request.data.get("category", "Educational News"),
+        source_url=request.data.get("source_url", ""),
+        source_name=request.data.get("source_name", ""),
+        created_by=user,
+    ).save()
+    notify_all_students(
+        "current_affair",
+        "Current Affairs",
+        row.title,
+        "/learning",
+        "violet",
+        "current_affairs",
+        row.id,
+    )
+    return ok({"item": simple_json(row, fields)}, status.HTTP_201_CREATED)
 
 
 @api_view(["GET", "POST", "PUT", "DELETE"])
 def assignments(request):
     user, query = class_scoped_query(request, Assignment)
     if request.method == "GET":
-        return ok({"results": [simple_json(row, ["title", "description", "class_level", "subject", "deadline", "created_at"]) for row in query.order_by("deadline")]})
+        student = get_student_for_user(user) if user.role == ROLE_STUDENT else None
+        results = []
+        for row in query.order_by("deadline"):
+            item = simple_json(row, ["title", "description", "class_level", "subject", "deadline", "created_at"])
+            submissions = AssignmentSubmission.objects(assignment=row).order_by("-submitted_at")
+            if user.role == ROLE_STUDENT:
+                own_submission = AssignmentSubmission.objects(assignment=row, student=student).first() if student else None
+                item["own_submission"] = simple_json(own_submission, ["answer_text", "file_url", "submitted_at"]) if own_submission else None
+            else:
+                item["submission_count"] = submissions.count()
+                item["submissions"] = [
+                    {
+                        **simple_json(submission, ["answer_text", "file_url", "submitted_at"]),
+                        "student": student_json(submission.student) if submission.student else None,
+                    }
+                    for submission in submissions
+                ]
+            results.append(item)
+        return ok({"results": results})
     require_roles(request, [ROLE_ADMIN, ROLE_TEACHER])
     if request.method in ["PUT", "DELETE"]:
         row = Assignment.objects(id=request.data.get("id") or request.GET.get("id")).first()
@@ -775,6 +1072,16 @@ def assignments(request):
         deadline=parse_date(data.get("deadline")),
         created_by=user,
     ).save()
+    notify_students_for_class(
+        row.class_level,
+        "assignment",
+        "Assignment",
+        f"New {row.subject} assignment added: {row.title}",
+        "/operations",
+        "red",
+        "assignment",
+        row.id,
+    )
     return ok({"assignment": simple_json(row, ["title", "description", "class_level", "subject", "deadline", "created_at"])}, status.HTTP_201_CREATED)
 
 
@@ -792,6 +1099,66 @@ def assignment_submit(request, assignment_id):
         file_url=request.data.get("file_url", ""),
     ).save()
     return ok({"submission": simple_json(row, ["answer_text", "file_url", "submitted_at"])}, status.HTTP_201_CREATED)
+
+
+@api_view(["GET"])
+def notifications(request):
+    user = require_roles(request, [ROLE_ADMIN, ROLE_TEACHER, ROLE_STUDENT])
+    rows = Notification.objects(recipient=user, dismissed=False).order_by("-created_at")[:75]
+    unread = Notification.objects(recipient=user, dismissed=False, is_read=False).count()
+    return ok({"results": [notification_json(row) for row in rows], "unread": unread})
+
+
+@api_view(["POST"])
+def notifications_mark_all_read(request):
+    user = require_roles(request, [ROLE_ADMIN, ROLE_TEACHER, ROLE_STUDENT])
+    Notification.objects(recipient=user, dismissed=False, is_read=False).update(
+        set__is_read=True,
+        set__updated_at=datetime.utcnow(),
+    )
+    return ok({"message": "Notifications marked read"})
+
+
+@api_view(["POST"])
+def notification_mark_read(request, notification_id):
+    user = require_roles(request, [ROLE_ADMIN, ROLE_TEACHER, ROLE_STUDENT])
+    row = Notification.objects(id=notification_id, recipient=user, dismissed=False).first()
+    if not row:
+        return bad("Notification not found", status.HTTP_404_NOT_FOUND)
+    row.update(is_read=True, updated_at=datetime.utcnow())
+    return ok({"notification": notification_json(Notification.objects(id=row.id).first())})
+
+
+@api_view(["DELETE"])
+def notification_dismiss(request, notification_id):
+    user = require_roles(request, [ROLE_ADMIN, ROLE_TEACHER, ROLE_STUDENT])
+    row = Notification.objects(id=notification_id, recipient=user, dismissed=False).first()
+    if not row:
+        return bad("Notification not found", status.HTTP_404_NOT_FOUND)
+    row.update(dismissed=True, updated_at=datetime.utcnow())
+    return ok({"message": "Notification dismissed"})
+
+
+AI_USAGE_LIMIT_MESSAGE = "Your AI usage limit has been reached. Please try again later."
+AI_TEMPORARY_FAILURE_MESSAGE = "AI service is temporarily unavailable. Please try again later."
+
+
+def safe_ai_error_message(exc):
+    text = str(exc).lower()
+    usage_limit_markers = [
+        "429",
+        "503",
+        "resource_exhausted",
+        "unavailable",
+        "quota",
+        "rate limit",
+        "model overloaded",
+        "overloaded",
+        "high demand",
+    ]
+    if any(marker in text for marker in usage_limit_markers):
+        return AI_USAGE_LIMIT_MESSAGE
+    return AI_TEMPORARY_FAILURE_MESSAGE
 
 
 @api_view(["GET", "POST"])
@@ -838,6 +1205,7 @@ def ai_chat(request):
             )
             answer = response.text
         except Exception as exc:
-            answer = f"AI service error: {exc}"
+            logger.exception("AI Tutor request failed")
+            answer = safe_ai_error_message(exc)
     row = ChatHistory(student=student, subject=subject, messages=[ChatMessage(role="student", content=prompt), ChatMessage(role="assistant", content=answer)]).save()
     return ok({"chat": {"id": str(row.id), "subject": subject, "answer": answer}})
