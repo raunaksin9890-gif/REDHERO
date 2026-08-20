@@ -43,6 +43,8 @@ function App() {
                 <Route index element={<Dashboard />} />
                 <Route path="directory" element={<Directory />} />
                 <Route path="learning" element={<Learning />} />
+                <Route path="learning/:sectionSlug" element={<Learning />} />
+                <Route path="learning/:sectionSlug/:itemId" element={<Learning />} />
                 <Route path="operations" element={<Operations />} />
                 <Route path="ai-tutor" element={<AiTutor />} />
               </Route>

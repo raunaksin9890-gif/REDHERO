@@ -1,23 +1,108 @@
-import { ArrowRight, BookOpen, Clock3, Download, Eye, FileText, GraduationCap, Layers3, Megaphone, Newspaper, Pencil, PlayCircle, PlaySquare, Save, Send, Sparkles, Trash2, TrendingUp, UploadCloud, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import {
+  ArrowLeft,
+  ArrowRight,
+  BookOpen,
+  Download,
+  ExternalLink,
+  Filter,
+  Megaphone,
+  Newspaper,
+  Pencil,
+  Play,
+  PlayCircle,
+  Save,
+  Search,
+  Send,
+  Sparkles,
+  Trash2,
+  TrendingUp,
+  UploadCloud,
+  X,
+} from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api/client.js";
 import { useAuth } from "../components/AuthProvider.jsx";
 import { ConfirmDialog, EmptyState, LoadingOverlay, useToast } from "../components/UX.jsx";
 
 const endpoints = [
-  { key: "notes", title: "Notes Library", icon: FileText, path: "/notes/" },
-  { key: "videos", title: "Lecture Videos", icon: PlaySquare, path: "/videos/" },
-  { key: "notices", title: "Notice Board", icon: Megaphone, path: "/notices/" },
-  { key: "blogs", title: "Blogs", icon: Newspaper, path: "/blogs/" },
-  { key: "currentAffairs", title: "Current Affairs", icon: Newspaper, path: "/current-affairs/" },
+  {
+    key: "notes",
+    slug: "notes",
+    title: "Notes / Lessons",
+    shortTitle: "Notes",
+    icon: BookOpen,
+    path: "/notes/",
+    countLabel: "Notes",
+    empty: "No notes available",
+    description: "Study notes, chapter-wise materials and important PDFs.",
+    detailDescription: "All study notes and materials.",
+    accent: "#d61f3a",
+  },
+  {
+    key: "blogs",
+    slug: "articles",
+    title: "Articles / Blogs",
+    shortTitle: "Articles",
+    icon: Newspaper,
+    path: "/blogs/",
+    countLabel: "Articles",
+    empty: "No articles available",
+    description: "Read informative articles and learning blogs.",
+    detailDescription: "Read and learn from informative articles.",
+    accent: "#8b5cf6",
+  },
+  {
+    key: "currentAffairs",
+    slug: "current-affairs",
+    title: "Current Affairs",
+    shortTitle: "Current Affairs",
+    icon: TrendingUp,
+    path: "/current-affairs/",
+    countLabel: "Updates",
+    empty: "No updates available",
+    description: "Stay updated with today's current affairs.",
+    detailDescription: "Stay updated with the latest current affairs.",
+    accent: "#16a34a",
+  },
+  {
+    key: "videos",
+    slug: "lecture-videos",
+    title: "Lecture Videos",
+    shortTitle: "Videos",
+    icon: PlayCircle,
+    path: "/videos/",
+    countLabel: "Videos",
+    empty: "No videos available",
+    description: "Watch video lectures with fast resume controls.",
+    detailDescription: "All video lessons in one place. Watch, learn and master every topic.",
+    accent: "#0ea5e9",
+  },
+  {
+    key: "notices",
+    slug: "notice-board",
+    title: "Notice Board",
+    shortTitle: "Notices",
+    icon: Megaphone,
+    path: "/notices/",
+    countLabel: "Notices",
+    empty: "No notices available",
+    description: "Important notices from your school and teachers.",
+    detailDescription: "Important notices from school and teachers.",
+    accent: "#f97316",
+  },
 ];
 
 export function Learning() {
   const { user, profile } = useAuth();
+  const { sectionSlug, itemId } = useParams();
+  const navigate = useNavigate();
   const [data, setData] = useState({});
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const toast = useToast();
+
+  const activeSection = endpoints.find((section) => section.slug === sectionSlug);
 
   async function load() {
     try {
@@ -36,107 +121,289 @@ export function Learning() {
     load();
   }, []);
 
-  const totalItems = endpoints.reduce((sum, section) => sum + (data[section.key] || []).length, 0);
-  const learningStats = [
-    { label: "Lessons", value: totalItems, icon: Layers3 },
-    { label: "Notes", value: (data.notes || []).length, icon: FileText },
-    { label: "Videos", value: (data.videos || []).length, icon: PlayCircle },
-  ];
-  const courseCards = buildCourseCards(data);
+  useEffect(() => {
+    if (sectionSlug && !activeSection) navigate("/learning", { replace: true });
+  }, [activeSection, navigate, sectionSlug]);
+
+  const courseCards = endpoints.map((section) => ({ ...section, items: data[section.key] || [] }));
 
   return (
     <div className="learning-hub">
       <style>{learningHubStyles}</style>
-      <section className="learning-hero">
-        <div>
-          <span className="learning-kicker"><Sparkles size={15} /> RedHero Learning</span>
-          <h1>Learning Hub</h1>
-          <p>Continue notes, lectures, announcements, articles, and current affairs from one polished classroom workspace.</p>
-          <div className="recent-lesson">
-            <Clock3 size={17} />
-            <span>Recently viewed lesson</span>
-            <strong>{firstAvailableTitle(data) || "Algebra Basics"}</strong>
-          </div>
-        </div>
-        <div className="learning-stat-grid">
-          {learningStats.map((stat) => {
-            const Icon = stat.icon;
-            return (
-              <article className="learning-stat" key={stat.label}>
-                <Icon size={20} />
-                <strong>{stat.value}</strong>
-                <span>{stat.label}</span>
-              </article>
-            );
-          })}
-        </div>
-      </section>
-
-      <section className="course-grid" aria-label="Learning courses">
-        {courseCards.map((course, index) => {
-          const Icon = course.icon;
-          return (
-            <article className="course-card" key={course.title} style={{ "--course-accent": course.accent, "--stagger": index }}>
-              <div className="course-thumb">
-                <Icon size={30} />
-                <span>{course.tag}</span>
-              </div>
-              <div className="course-copy">
-                <span>{course.meta}</span>
-                <h2>{course.title}</h2>
-                <p>{course.description}</p>
-              </div>
-              <div className="course-progress" aria-label={`${course.progress}% complete`}>
-                <div className="completion-ring" style={{ "--value": course.progress }}><strong>{course.progress}%</strong></div>
-                <a className="continue-button" href="#learning-content"><span>Continue Learning</span><ArrowRight size={16} /></a>
-              </div>
-            </article>
-          );
-        })}
-      </section>
-
-      <div id="learning-content" className="learning-content-grid">
-        {user.role !== "student" && <ContentForm user={user} onSaved={load} setMessage={setMessage} />}
-        {endpoints.map((section) => {
-          const Icon = section.icon;
-          return (
-            <section className="panel learning-section" key={section.key}>
-              <h2><Icon size={20} /> {section.title}</h2>
-              <div className="stack">
-                {(data[section.key] || []).map((item) => (
-                  <ContentItem key={item.id} section={section} item={item} user={user} onSaved={load} setMessage={setMessage} />
-                ))}
-                {(data[section.key] || []).length === 0 && <EmptyState title="No items available" message={profile?.class_level ? `Nothing for Class ${profile.class_level} yet.` : "Published learning content will appear here."} />}
-              </div>
-            </section>
-          );
-        })}
-      </div>
+      {activeSection ? (
+        <LearningDetail
+          data={data}
+          itemId={itemId}
+          onSaved={load}
+          section={activeSection}
+          setMessage={setMessage}
+          user={user}
+        />
+      ) : (
+        <LearningLanding
+          cards={courseCards}
+          onSaved={load}
+          profile={profile}
+          setMessage={setMessage}
+          user={user}
+        />
+      )}
       <LoadingOverlay show={busy} label="Loading learning content" />
       {message && <div className="inline-message">{message}</div>}
     </div>
   );
 }
 
-function firstAvailableTitle(data) {
-  for (const key of ["videos", "notes", "blogs", "currentAffairs", "notices"]) {
-    if (data[key]?.[0]?.title) return data[key][0].title;
-  }
-  return "";
+function LearningLanding({ cards, onSaved, profile, setMessage, user }) {
+  const studentClass = profile?.class_level ? `Class ${profile.class_level}` : "Learning Portal";
+  return (
+    <>
+      <section className="learning-title-row">
+        <div>
+          <h1>Learning Hub</h1>
+          <p>Continue your learning journey. Explore notes, videos, articles and more all in one place.</p>
+        </div>
+        <div className="student-pill">
+          <Sparkles size={18} />
+          <span>Hello, {profile?.name || user.name}</span>
+          <strong>{studentClass}</strong>
+        </div>
+      </section>
+
+      <section className="learning-card-grid" aria-label="Learning categories">
+        {cards.map((course, index) => {
+          const Icon = course.icon;
+          return (
+            <article className="learning-card" key={course.key} style={{ "--course-accent": course.accent, "--stagger": index }}>
+              <div className="learning-card-icon"><Icon size={30} /></div>
+              <h2>{course.title}</h2>
+              <p>{course.description}</p>
+              <strong className="learning-count">{course.items.length} {course.countLabel}</strong>
+              <div className="learning-card-footer">
+                <div className="count-ring" aria-label={`${course.items.length} ${course.countLabel}`}>
+                  <strong>{course.items.length}</strong>
+                </div>
+                <Link className="continue-button" to={`/learning/${course.slug}`}>
+                  <span>Continue Learning</span>
+                  <ArrowRight size={16} />
+                </Link>
+              </div>
+            </article>
+          );
+        })}
+      </section>
+
+      {user.role !== "student" && <ContentForm user={user} onSaved={onSaved} setMessage={setMessage} />}
+    </>
+  );
 }
 
-function buildCourseCards(data) {
-  return [
-    { title: data.notes?.[0]?.title || "Algebra Basics", description: "Structured notes, PDF references, and concept checkpoints for fast revision.", meta: `${data.notes?.length || 0} notes available`, tag: "PDF", progress: Math.min(96, 48 + (data.notes?.length || 0) * 8), icon: GraduationCap, accent: "#ff375f" },
-    { title: data.blogs?.[0]?.title || "Historical Figures", description: "Editorial-style learning stories with concise reading flow and context.", meta: `${data.blogs?.length || 0} articles`, tag: "Read", progress: Math.min(92, 42 + (data.blogs?.length || 0) * 10), icon: Newspaper, accent: "#8b5cf6" },
-    { title: data.currentAffairs?.[0]?.title || "Mathematics", description: "Current affairs and practice topics arranged for continuous study momentum.", meta: `${data.currentAffairs?.length || 0} updates`, tag: "Digest", progress: Math.min(90, 36 + (data.currentAffairs?.length || 0) * 9), icon: TrendingUp, accent: "#22c55e" },
-    { title: data.videos?.[0]?.title || "Lecture Videos", description: "Video lessons with fast resume controls and a polished watch-first layout.", meta: `${data.videos?.length || 0} videos`, tag: "Watch", progress: Math.min(98, 50 + (data.videos?.length || 0) * 7), icon: PlayCircle, accent: "#38bdf8" },
-  ];
+function LearningDetail({ data, itemId, onSaved, section, setMessage, user }) {
+  const items = data[section.key] || [];
+  const [query, setQuery] = useState("");
+  const [selectedId, setSelectedId] = useState(itemId || "");
+  const selectedItem = useMemo(() => {
+    if (!items.length) return null;
+    return items.find((item) => item.id === selectedId) || items[0];
+  }, [items, selectedId]);
+
+  useEffect(() => {
+    setSelectedId(itemId || "");
+  }, [itemId, section.slug]);
+
+  const filtered = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    if (!needle) return items;
+    return items.filter((item) => searchableText(item).includes(needle));
+  }, [items, query]);
+
+  const Icon = section.icon;
+  const isVideo = section.key === "videos";
+
+  return (
+    <section className={`learning-detail ${isVideo ? "video-detail" : ""}`}>
+      <header className="detail-head">
+        <Link className="back-link" to="/learning"><ArrowLeft size={16} /> Learning Hub</Link>
+        <div className="detail-title">
+          <div className="detail-icon" style={{ "--course-accent": section.accent }}><Icon size={28} /></div>
+          <div>
+            <h1>{section.title}</h1>
+            <p>{section.detailDescription}</p>
+          </div>
+        </div>
+      </header>
+
+      <div className="detail-tools">
+        <label className="detail-search">
+          <Search size={17} />
+          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder={`Search ${section.shortTitle.toLowerCase()}...`} />
+        </label>
+        <button className="filter-button" type="button"><Filter size={16} /> Filter</button>
+      </div>
+
+      {user.role !== "student" && <ContentForm compact user={user} onSaved={onSaved} setMessage={setMessage} initialType={section.key} />}
+
+      {isVideo ? (
+        <VideoLearningPage
+          items={filtered}
+          onSaved={onSaved}
+          section={section}
+          selectedItem={selectedItem}
+          setMessage={setMessage}
+          setSelectedId={setSelectedId}
+          user={user}
+        />
+      ) : (
+        <ResourceDetailPage
+          items={filtered}
+          onSaved={onSaved}
+          section={section}
+          selectedItem={selectedItem}
+          setMessage={setMessage}
+          setSelectedId={setSelectedId}
+          user={user}
+        />
+      )}
+    </section>
+  );
 }
 
-function ContentForm({ user, onSaved, setMessage }) {
+function ResourceDetailPage({ items, onSaved, section, selectedItem, setMessage, setSelectedId, user }) {
+  return (
+    <div className="resource-layout">
+      <section className="resource-list-panel">
+        <h2>All {section.countLabel} ({items.length})</h2>
+        <div className="resource-list">
+          {items.map((item, index) => (
+            <button className={`resource-list-item ${selectedItem?.id === item.id ? "active" : ""}`} key={item.id} onClick={() => setSelectedId(item.id)} type="button">
+              <span>{index + 1}</span>
+              <div>
+                <strong>{item.title}</strong>
+                <small>{resourceMeta(section.key, item)}</small>
+              </div>
+              <ArrowRight size={15} />
+            </button>
+          ))}
+          {!items.length && <EmptyState title={section.empty} message="Published content will appear here when available." />}
+        </div>
+      </section>
+
+      <section className="resource-detail-panel">
+        {selectedItem ? (
+          <SelectedResource section={section} item={selectedItem} user={user} onSaved={onSaved} setMessage={setMessage} />
+        ) : (
+          <EmptyState title={section.empty} message="There is no content to open yet." />
+        )}
+      </section>
+    </div>
+  );
+}
+
+function VideoLearningPage({ items, onSaved, section, selectedItem, setMessage, setSelectedId, user }) {
+  const selected = selectedItem || items[0];
+  return (
+    <div className="video-layout">
+      <section className="video-list-panel">
+        <h2>All Videos ({items.length})</h2>
+        <div className="video-list">
+          {items.map((item, index) => (
+            <button className={`video-row ${selected?.id === item.id ? "active" : ""}`} key={item.id} onClick={() => setSelectedId(item.id)} type="button">
+              <div className="mini-thumb" style={{ backgroundImage: thumbnailUrl(item.youtube_url) ? `url(${thumbnailUrl(item.youtube_url)})` : undefined }}>
+                <span>{String(index + 1).padStart(2, "0")}</span>
+              </div>
+              <div>
+                <strong>{item.title}</strong>
+                <small>{resourceMeta(section.key, item)}</small>
+                {item.description && <em>{item.description}</em>}
+              </div>
+            </button>
+          ))}
+          {!items.length && <EmptyState title={section.empty} message="Published videos will appear here when available." />}
+        </div>
+      </section>
+
+      <section className="video-player-panel">
+        {selected ? (
+          <>
+            <div className="video-stage">
+              {embedUrl(selected.youtube_url) ? (
+                <iframe src={embedUrl(selected.youtube_url)} title={selected.title} allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowFullScreen />
+              ) : (
+                <div className="video-placeholder"><Play size={34} /><span>Video link available</span></div>
+              )}
+            </div>
+            <SelectedResource section={section} item={selected} user={user} onSaved={onSaved} setMessage={setMessage} />
+          </>
+        ) : (
+          <EmptyState title={section.empty} message="There is no video to play yet." />
+        )}
+      </section>
+    </div>
+  );
+}
+
+function SelectedResource({ section, item, user, onSaved, setMessage }) {
+  return (
+    <article className="selected-resource">
+      <header>
+        <span>{resourceTypeLabel(section.key)}</span>
+        <h2>{item.title}</h2>
+        <p>{resourceMeta(section.key, item)}</p>
+      </header>
+
+      <div className="detail-section">
+        <h3>Description</h3>
+        <p>{item.description || item.summary || item.content || item.body || "No description available."}</p>
+      </div>
+
+      {section.key === "notes" && (
+        <div className="detail-section">
+          <h3>PDFs and Attachments</h3>
+          {item.pdf_url ? <a className="resource-action" href={item.pdf_url} target="_blank" rel="noreferrer"><Download size={17} /> Open PDF</a> : <span className="muted-line">No PDF attached.</span>}
+        </div>
+      )}
+
+      {section.key === "videos" && (
+        <div className="detail-section">
+          <h3>Video Link</h3>
+          {item.youtube_url ? <a className="resource-action" href={item.youtube_url} target="_blank" rel="noreferrer"><ExternalLink size={17} /> Open video</a> : <span className="muted-line">No video link attached.</span>}
+        </div>
+      )}
+
+      {["blogs", "currentAffairs", "notices"].includes(section.key) && (
+        <div className="detail-section">
+          <h3>Content</h3>
+          <p>{item.content || item.summary || item.body || "No content available."}</p>
+        </div>
+      )}
+
+      <div className="detail-section meta-grid">
+        {item.class_level && <MetaTile label="Class" value={`Class ${item.class_level}`} />}
+        {item.subject && <MetaTile label="Subject" value={item.subject} />}
+        {item.chapter && <MetaTile label="Chapter" value={item.chapter} />}
+        {item.category && <MetaTile label="Category" value={item.category} />}
+        {item.created_at && <MetaTile label="Published" value={formatDate(item.created_at)} />}
+        {item.published_on && <MetaTile label="Published" value={formatDate(item.published_on)} />}
+      </div>
+
+      <ContentItem section={section} item={item} user={user} onSaved={onSaved} setMessage={setMessage} />
+    </article>
+  );
+}
+
+function MetaTile({ label, value }) {
+  return (
+    <div className="meta-tile">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function ContentForm({ compact = false, initialType, user, onSaved, setMessage }) {
   const allowedEndpoints = user.role === "super_admin" ? endpoints : endpoints.filter((item) => ["notes", "videos", "notices"].includes(item.key));
-  const [type, setType] = useState(allowedEndpoints[0].key);
+  const fallbackType = allowedEndpoints.some((item) => item.key === initialType) ? initialType : allowedEndpoints[0].key;
+  const [type, setType] = useState(fallbackType);
   const [form, setForm] = useState({ title: "", class_level: "10", subject: "Mathematics", chapter: "", description: "", url: "", body: "" });
   const [progress, setProgress] = useState(0);
   const toast = useToast();
@@ -168,7 +435,7 @@ function ContentForm({ user, onSaved, setMessage }) {
   }
 
   return (
-    <section className="panel wide learning-section publish-panel">
+    <section className={`publish-panel ${compact ? "compact" : ""}`}>
       <h2><Send size={20} /> Publish Learning Content</h2>
       <form className="content-form" onSubmit={submit}>
         <select value={type} onChange={(event) => setType(event.target.value)}>{allowedEndpoints.map((item) => <option key={item.key} value={item.key}>{item.title}</option>)}</select>
@@ -176,6 +443,7 @@ function ContentForm({ user, onSaved, setMessage }) {
         {["notes", "videos", "notices"].includes(type) && <input placeholder="Class" value={form.class_level} onChange={(event) => setForm({ ...form, class_level: event.target.value })} />}
         {["notes", "videos"].includes(type) && <input placeholder="Subject" value={form.subject} onChange={(event) => setForm({ ...form, subject: event.target.value })} />}
         {["notes", "videos"].includes(type) && <input placeholder="Chapter" value={form.chapter} onChange={(event) => setForm({ ...form, chapter: event.target.value })} />}
+        {type === "videos" && <input placeholder="Description" value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} />}
         {["notes", "videos"].includes(type) && (
           <label className="upload-drop">
             <UploadCloud size={18} />
@@ -240,44 +508,33 @@ function ContentItem({ section, item, user, onSaved, setMessage }) {
     }
   }
 
+  if (!canManage) return null;
+
   if (editing) {
     return (
-      <article className="row-item learning-item editing-item">
+      <article className="manage-card editing-item">
         <input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} />
         {["notes", "videos", "notices"].includes(section.key) && <input value={draft.class_level} onChange={(event) => setDraft({ ...draft, class_level: event.target.value })} />}
         {["notes", "videos"].includes(section.key) && <input value={draft.subject} onChange={(event) => setDraft({ ...draft, subject: event.target.value })} />}
         {["notes", "videos"].includes(section.key) && <input value={draft.chapter} onChange={(event) => setDraft({ ...draft, chapter: event.target.value })} />}
+        {section.key === "videos" && <input value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} />}
         {["notes", "videos"].includes(section.key) && <input value={draft.url} onChange={(event) => setDraft({ ...draft, url: event.target.value })} />}
         {["notices", "blogs", "currentAffairs"].includes(section.key) && <textarea value={draft.body} onChange={(event) => setDraft({ ...draft, body: event.target.value })} />}
-        <button className="icon-button" title="Save" onClick={save}><Save size={16} /></button>
-        <button className="icon-button" title="Cancel" onClick={() => setEditing(false)}><X size={16} /></button>
+        <div className="manage-actions">
+          <button className="icon-button" title="Save" onClick={save}><Save size={16} /></button>
+          <button className="icon-button" title="Cancel" onClick={() => setEditing(false)}><X size={16} /></button>
+        </div>
       </article>
     );
   }
 
   return (
-    <article className={`row-item learning-item ${section.key}-item`}>
-      <div className="learning-item-head">
-        <div className="item-icon">{section.key === "videos" ? <PlayCircle size={20} /> : section.key === "notes" ? <FileText size={20} /> : section.key === "notices" ? <Megaphone size={20} /> : <BookOpen size={20} />}</div>
-        <div>
-          <strong>{item.title}</strong>
-          <span>{item.subject || item.category || item.class_level} {item.chapter ? `· ${item.chapter}` : ""}</span>
-        </div>
+    <div className="manage-card">
+      <span>Manage this item</span>
+      <div className="manage-actions">
+        <button className="icon-button" title="Edit" onClick={() => setEditing(true)}><Pencil size={16} /></button>
+        <button className="icon-button" title="Delete" onClick={() => setConfirmOpen(true)}><Trash2 size={16} /></button>
       </div>
-      {item.body && <span>{item.body}</span>}
-      {item.content && <span>{item.content}</span>}
-      {item.summary && <span>{item.summary}</span>}
-      {item.pdf_url && <iframe className="pdf-preview" src={item.pdf_url} title={`${item.title} preview`} />}
-      <div className="quick-actions">
-        {item.youtube_url && <a className="secondary link-button" href={item.youtube_url} target="_blank" rel="noreferrer"><Eye size={16} /> Open video</a>}
-        {item.pdf_url && <a className="secondary link-button" href={item.pdf_url} target="_blank" rel="noreferrer"><Download size={16} /> Download PDF</a>}
-      </div>
-      {canManage && (
-        <span>
-          <button className="icon-button" title="Edit" onClick={() => setEditing(true)}><Pencil size={16} /></button>
-          <button className="icon-button" title="Delete" onClick={() => setConfirmOpen(true)}><Trash2 size={16} /></button>
-        </span>
-      )}
       <ConfirmDialog
         open={confirmOpen}
         title={`Delete ${item.title}?`}
@@ -286,8 +543,49 @@ function ContentItem({ section, item, user, onSaved, setMessage }) {
         onCancel={() => setConfirmOpen(false)}
         onConfirm={remove}
       />
-    </article>
+    </div>
   );
+}
+
+function resourceTypeLabel(key) {
+  if (key === "notes") return "Notes / Lessons";
+  if (key === "blogs") return "Article";
+  if (key === "currentAffairs") return "Current Affairs";
+  if (key === "videos") return "Lecture Video";
+  return "Notice";
+}
+
+function resourceMeta(key, item) {
+  if (key === "notes" || key === "videos") return [item.subject, item.chapter, item.class_level ? `Class ${item.class_level}` : ""].filter(Boolean).join(" / ");
+  if (key === "notices") return [item.class_level === "all" ? "All classes" : item.class_level ? `Class ${item.class_level}` : "", formatDate(item.created_at)].filter(Boolean).join(" / ");
+  return [item.category, formatDate(item.published_on || item.created_at)].filter(Boolean).join(" / ");
+}
+
+function searchableText(item) {
+  return [item.title, item.subject, item.chapter, item.category, item.description, item.summary, item.content, item.body, item.class_level].filter(Boolean).join(" ").toLowerCase();
+}
+
+function formatDate(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleDateString(undefined, { day: "2-digit", month: "short", year: "numeric" });
+}
+
+function youtubeId(url) {
+  if (!url) return "";
+  const match = String(url).match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/))([A-Za-z0-9_-]{6,})/);
+  return match?.[1] || "";
+}
+
+function embedUrl(url) {
+  const id = youtubeId(url);
+  return id ? `https://www.youtube.com/embed/${id}` : "";
+}
+
+function thumbnailUrl(url) {
+  const id = youtubeId(url);
+  return id ? `https://img.youtube.com/vi/${id}/mqdefault.jpg` : "";
 }
 
 const learningHubStyles = `
@@ -295,201 +593,364 @@ const learningHubStyles = `
   min-height: calc(100vh - 112px);
   margin: -8px;
   padding: clamp(16px, 2.4vw, 28px);
-  border-radius: 28px;
+  border-radius: 24px;
   background:
-    radial-gradient(circle at 16% 8%, rgba(214,31,58,.24), transparent 30%),
-    radial-gradient(circle at 82% 6%, rgba(56,189,248,.14), transparent 28%),
-    linear-gradient(145deg, #111318, #171923 48%, #101217);
+    radial-gradient(circle at 16% 8%, rgba(214,31,58,.22), transparent 30%),
+    radial-gradient(circle at 84% 10%, rgba(14,165,233,.12), transparent 28%),
+    linear-gradient(145deg, #101217, #171a22 48%, #0f1217);
   color: #f8fafc;
-  animation: learningPageIn 360ms ease both;
+  animation: learningPageIn 320ms ease both;
 }
-.learning-hub .learning-hero,
-.learning-hub .course-card,
-.learning-hub .panel {
-  border: 1px solid rgba(255,255,255,.12);
-  background: linear-gradient(145deg, rgba(255,255,255,.12), rgba(255,255,255,.055));
-  box-shadow: 0 24px 80px rgba(0,0,0,.26), 0 0 46px rgba(214,31,58,.10);
-  backdrop-filter: blur(22px);
+.learning-title-row {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 24px;
 }
-.learning-hero {
-  display: grid;
-  grid-template-columns: minmax(0, 1.45fr) minmax(260px, .75fr);
-  gap: 24px;
-  align-items: stretch;
-  border-radius: 28px;
-  padding: clamp(24px, 4vw, 42px);
-  overflow: hidden;
-  position: relative;
-}
-.learning-hero::after {
-  content: "";
-  position: absolute;
-  right: -80px;
-  top: -80px;
-  width: 260px;
-  height: 260px;
-  border-radius: 999px;
-  background: rgba(214,31,58,.28);
-  filter: blur(12px);
-  animation: learningFloat 5s ease-in-out infinite;
-}
-.learning-kicker {
-  width: fit-content;
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-height: 32px;
-  padding: 0 12px;
-  border-radius: 999px;
-  color: #fecdd3;
-  background: rgba(214,31,58,.16);
-  border: 1px solid rgba(254,205,211,.2);
-  font-weight: 900;
-}
-.learning-hero h1 {
-  margin: 18px 0 10px;
-  font-size: clamp(38px, 6vw, 72px);
+.learning-title-row h1, .detail-head h1 {
+  margin: 0 0 8px;
+  color: #ffffff;
+  font-size: clamp(30px, 5vw, 46px);
+  line-height: 1.05;
   letter-spacing: 0;
-  line-height: .95;
 }
-.learning-hero p {
-  max-width: 760px;
-  color: #aeb6c4;
-  line-height: 1.7;
-  font-size: 17px;
+.learning-title-row p, .detail-head p {
   margin: 0;
+  max-width: 680px;
+  color: #d1d5db;
+  line-height: 1.6;
 }
-.recent-lesson {
-  margin-top: 24px;
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 10px;
-  color: #cbd5e1;
-}
-.recent-lesson strong {
-  color: #ffffff;
-}
-.learning-stat-grid {
+.student-pill {
+  min-width: 190px;
   display: grid;
-  gap: 12px;
-  align-content: center;
-  position: relative;
-  z-index: 1;
+  gap: 3px;
+  padding: 16px 18px;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(255,255,255,.075);
+  box-shadow: 0 16px 46px rgba(0,0,0,.22);
 }
-.learning-stat {
-  min-height: 92px;
-  display: grid;
-  grid-template-columns: auto 1fr;
-  align-items: center;
-  gap: 8px 12px;
-  padding: 18px;
-  border-radius: 22px;
-  background: rgba(8,10,15,.38);
-  border: 1px solid rgba(255,255,255,.1);
-}
-.learning-stat svg { color: #fb7185; }
-.learning-stat strong { font-size: 28px; }
-.learning-stat span { grid-column: 2; color: #9ca3af; font-weight: 800; }
-.course-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 18px;
-  margin: 22px 0;
-}
-.course-card {
-  min-height: 330px;
-  display: grid;
-  grid-template-rows: auto 1fr auto;
-  gap: 18px;
-  padding: 20px;
-  border-radius: 26px;
-  position: relative;
-  overflow: hidden;
-  animation: learningCardIn 380ms ease both;
-  animation-delay: calc(var(--stagger, 0) * 70ms);
-  transition: transform 220ms ease, box-shadow 220ms ease, border-color 220ms ease;
-}
-.course-card::before {
-  content: "";
-  position: absolute;
-  inset: -30% -20% auto auto;
-  width: 180px;
-  height: 180px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--course-accent), transparent 55%);
-  filter: blur(16px);
-}
-.course-card:hover {
-  transform: translateY(-8px) scale(1.01);
-  border-color: color-mix(in srgb, var(--course-accent), white 20%);
-  box-shadow: 0 34px 90px rgba(0,0,0,.32), 0 0 54px color-mix(in srgb, var(--course-accent), transparent 72%);
-}
-.course-thumb {
-  min-height: 118px;
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  padding: 16px;
-  border-radius: 22px;
-  background:
-    linear-gradient(145deg, color-mix(in srgb, var(--course-accent), transparent 62%), rgba(255,255,255,.08)),
-    radial-gradient(circle at 20% 10%, rgba(255,255,255,.2), transparent 26%);
-  color: #ffffff;
-}
-.course-thumb span {
-  min-height: 28px;
-  display: inline-flex;
-  align-items: center;
-  padding: 0 10px;
-  border-radius: 999px;
-  background: rgba(255,255,255,.14);
-  font-size: 12px;
-  font-weight: 900;
-}
-.course-copy span { color: #aeb6c4; font-weight: 850; font-size: 13px; }
-.course-copy h2 { margin: 8px 0; font-size: 24px; letter-spacing: 0; }
-.course-copy p { margin: 0; color: #aeb6c4; line-height: 1.55; }
-.course-progress {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-.completion-ring {
-  width: 62px;
-  height: 62px;
-  border-radius: 999px;
-  display: grid;
-  place-items: center;
-  background: conic-gradient(var(--course-accent) calc(var(--value) * 1%), rgba(255,255,255,.14) 0);
-  box-shadow: inset 0 0 0 8px rgba(16,18,24,.95);
-}
-.completion-ring strong { font-size: 14px; }
-.continue-button {
-  min-height: 42px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  padding: 0 14px;
-  border-radius: 999px;
-  color: #ffffff;
-  background: linear-gradient(135deg, #d61f3a, #7f1d1d);
-  box-shadow: 0 16px 34px rgba(214,31,58,.22);
-}
-.learning-content-grid {
+.student-pill span { color: #ffffff; font-weight: 850; }
+.student-pill strong { color: #d1d5db; font-size: 13px; }
+.learning-card-grid {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 18px;
 }
-.learning-hub .wide { grid-column: span 2; }
-.learning-section {
-  border-radius: 24px;
-  padding: 22px;
-  color: #f8fafc;
+.learning-card {
+  min-height: 292px;
+  display: grid;
+  grid-template-rows: auto auto 1fr auto auto;
+  gap: 14px;
+  padding: 24px;
+  border-radius: 12px;
+  border: 1px solid color-mix(in srgb, var(--course-accent), transparent 62%);
+  background:
+    radial-gradient(circle at 8% 0%, color-mix(in srgb, var(--course-accent), transparent 78%), transparent 38%),
+    linear-gradient(145deg, rgba(255,255,255,.12), rgba(255,255,255,.045));
+  box-shadow: 0 22px 70px rgba(0,0,0,.24);
+  backdrop-filter: blur(22px);
+  animation: learningCardIn 340ms ease both;
+  animation-delay: calc(var(--stagger, 0) * 60ms);
 }
-.learning-section h2 { color: #ffffff; }
+.learning-card:nth-child(4) { margin-left: 18%; }
+.learning-card h2 {
+  margin: 0;
+  color: #ffffff;
+  font-size: 21px;
+  letter-spacing: 0;
+}
+.learning-card p {
+  margin: 0;
+  color: #d1d5db;
+  line-height: 1.55;
+}
+.learning-card-icon {
+  width: 52px;
+  height: 52px;
+  display: grid;
+  place-items: center;
+  border-radius: 10px;
+  color: #ffffff;
+  background: linear-gradient(135deg, var(--course-accent), color-mix(in srgb, var(--course-accent), #111827 36%));
+  box-shadow: 0 16px 34px color-mix(in srgb, var(--course-accent), transparent 72%);
+}
+.learning-count {
+  color: #ffffff;
+  font-size: 17px;
+}
+.learning-card-footer {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+}
+.count-ring {
+  width: 54px;
+  height: 54px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  color: #ffffff;
+  background: radial-gradient(circle at center, #111827 52%, transparent 53%), conic-gradient(var(--course-accent) 75%, rgba(255,255,255,.14) 0);
+}
+.count-ring strong { font-size: 15px; }
+.continue-button, .back-link, .filter-button, .resource-action {
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border-radius: 8px;
+  color: #ffffff;
+  border: 1px solid rgba(255,255,255,.12);
+  background: linear-gradient(135deg, #d61f3a, #9d1430);
+  box-shadow: 0 16px 34px rgba(214,31,58,.22);
+  padding: 0 14px;
+  font-weight: 850;
+}
+.detail-head {
+  display: grid;
+  gap: 18px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid rgba(255,255,255,.12);
+}
+.back-link {
+  width: fit-content;
+  background: rgba(255,255,255,.08);
+  box-shadow: none;
+}
+.detail-title {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.detail-icon {
+  width: 58px;
+  height: 58px;
+  display: grid;
+  place-items: center;
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--course-accent), transparent 72%);
+  color: #ffffff;
+  border: 1px solid color-mix(in srgb, var(--course-accent), transparent 44%);
+}
+.detail-tools {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto;
+  gap: 12px;
+  margin: 18px 0;
+}
+.detail-search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 42px;
+  padding: 0 12px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(255,255,255,.075);
+}
+.detail-search input {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: #ffffff;
+}
+.detail-search input::placeholder { color: #9ca3af; }
+.filter-button {
+  background: rgba(255,255,255,.075);
+  box-shadow: none;
+}
+.resource-layout, .video-layout {
+  display: grid;
+  grid-template-columns: minmax(260px, .85fr) minmax(0, 1.25fr);
+  gap: 18px;
+}
+.video-layout { grid-template-columns: minmax(340px, .95fr) minmax(0, 1.05fr); }
+.resource-list-panel, .resource-detail-panel, .video-list-panel, .video-player-panel, .publish-panel {
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,.10);
+  background: linear-gradient(145deg, rgba(255,255,255,.10), rgba(255,255,255,.045));
+  box-shadow: 0 22px 70px rgba(0,0,0,.22);
+  backdrop-filter: blur(22px);
+  padding: 18px;
+}
+.resource-list-panel h2, .video-list-panel h2, .publish-panel h2 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 14px;
+  color: #ffffff;
+  font-size: 17px;
+}
+.resource-list, .video-list {
+  display: grid;
+  gap: 10px;
+}
+.resource-list-item, .video-row {
+  width: 100%;
+  min-height: 66px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  border: 1px solid rgba(255,255,255,.08);
+  border-radius: 10px;
+  padding: 12px;
+  background: rgba(255,255,255,.065);
+  color: #ffffff;
+  text-align: left;
+  cursor: pointer;
+}
+.resource-list-item.active, .video-row.active {
+  border-color: rgba(214,31,58,.72);
+  background: rgba(214,31,58,.12);
+}
+.resource-list-item > span {
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: rgba(255,255,255,.10);
+  font-weight: 900;
+}
+.resource-list-item strong, .video-row strong {
+  display: block;
+  overflow-wrap: anywhere;
+}
+.resource-list-item small, .video-row small, .video-row em {
+  display: block;
+  margin-top: 4px;
+  color: #aeb6c4;
+  font-style: normal;
+  line-height: 1.35;
+}
+.video-row {
+  grid-template-columns: 112px minmax(0, 1fr);
+}
+.mini-thumb {
+  height: 64px;
+  border-radius: 8px;
+  background:
+    linear-gradient(135deg, rgba(214,31,58,.26), rgba(14,165,233,.18)),
+    #111827;
+  background-position: center;
+  background-size: cover;
+  position: relative;
+  overflow: hidden;
+}
+.mini-thumb span {
+  position: absolute;
+  left: 7px;
+  top: 7px;
+  min-width: 26px;
+  height: 24px;
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  background: #111827;
+  color: #ffffff;
+  font-size: 12px;
+  font-weight: 950;
+  border: 1px solid rgba(255,255,255,.12);
+}
+.video-stage {
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: #070a10;
+}
+.video-stage iframe {
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+.video-placeholder {
+  height: 100%;
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 10px;
+  color: #ffffff;
+}
+.selected-resource {
+  display: grid;
+  gap: 14px;
+}
+.selected-resource header {
+  display: grid;
+  gap: 6px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid rgba(255,255,255,.10);
+}
+.selected-resource header span {
+  width: fit-content;
+  min-height: 24px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 9px;
+  border-radius: 999px;
+  background: rgba(214,31,58,.16);
+  color: #fecdd3;
+  font-size: 12px;
+  font-weight: 900;
+}
+.selected-resource h2 {
+  margin: 0;
+  color: #ffffff;
+  font-size: clamp(22px, 3vw, 32px);
+  letter-spacing: 0;
+}
+.selected-resource p {
+  margin: 0;
+  color: #cbd5e1;
+  line-height: 1.65;
+  white-space: pre-wrap;
+}
+.detail-section {
+  display: grid;
+  gap: 9px;
+  padding: 14px;
+  border-radius: 10px;
+  background: rgba(8,10,15,.34);
+  border: 1px solid rgba(255,255,255,.08);
+}
+.detail-section h3 {
+  margin: 0;
+  color: #ffffff;
+  font-size: 15px;
+  letter-spacing: 0;
+}
+.resource-action {
+  width: fit-content;
+}
+.muted-line { color: #aeb6c4; }
+.meta-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.meta-tile {
+  display: grid;
+  gap: 3px;
+}
+.meta-tile span {
+  color: #9ca3af;
+  font-size: 12px;
+  font-weight: 850;
+}
+.meta-tile strong {
+  color: #ffffff;
+  overflow-wrap: anywhere;
+}
+.publish-panel {
+  margin-top: 18px;
+}
+.publish-panel.compact {
+  margin: 0 0 18px;
+}
 .learning-hub input,
 .learning-hub select,
 .learning-hub textarea {
@@ -499,34 +960,8 @@ const learningHubStyles = `
 }
 .learning-hub input::placeholder,
 .learning-hub textarea::placeholder { color: #778195; }
-.learning-item {
-  border-radius: 20px;
-  padding: 16px;
-  color: #e5e7eb;
-  background: rgba(9,11,17,.52);
-  border: 1px solid rgba(255,255,255,.10);
-  box-shadow: 0 14px 32px rgba(0,0,0,.16);
-}
-.learning-item:hover {
-  transform: translateY(-4px);
-  border-color: rgba(214,31,58,.28);
-  box-shadow: 0 22px 48px rgba(0,0,0,.22), 0 0 34px rgba(214,31,58,.12);
-}
-.learning-item-head {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-.learning-item-head strong { color: #ffffff; font-size: 16px; }
-.learning-item span { color: #aeb6c4; }
-.item-icon {
-  width: 44px;
-  height: 44px;
-  display: grid;
-  place-items: center;
-  border-radius: 16px;
-  color: #fb7185;
-  background: rgba(214,31,58,.14);
+.learning-hub .primary {
+  background: linear-gradient(135deg, #d61f3a, #8f1026);
 }
 .learning-hub .secondary,
 .learning-hub .icon-button {
@@ -534,21 +969,49 @@ const learningHubStyles = `
   color: #f8fafc;
   border-color: rgba(255,255,255,.12);
 }
-.learning-hub .primary {
-  background: linear-gradient(135deg, #d61f3a, #8f1026);
-}
 .learning-hub .empty-state { color: #aeb6c4; }
 .learning-hub .empty-state strong { color: #ffffff; }
+.manage-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-radius: 10px;
+  padding: 12px;
+  background: rgba(255,255,255,.055);
+  border: 1px solid rgba(255,255,255,.08);
+}
+.manage-card > span { color: #cbd5e1; font-weight: 850; }
+.manage-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.editing-item {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.editing-item textarea, .editing-item .manage-actions {
+  grid-column: 1 / -1;
+}
 @keyframes learningPageIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
-@keyframes learningCardIn { from { opacity: 0; transform: translateY(18px) scale(.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
-@keyframes learningFloat { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(12px); } }
+@keyframes learningCardIn { from { opacity: 0; transform: translateY(14px) scale(.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
 @media (max-width: 1180px) {
-  .course-grid, .learning-content-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .learning-card-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .learning-card:nth-child(4) { margin-left: 0; }
+  .resource-layout, .video-layout { grid-template-columns: 1fr; }
 }
 @media (max-width: 760px) {
-  .learning-hub { margin: 0; padding: 14px; border-radius: 20px; }
-  .learning-hero, .course-grid, .learning-content-grid { grid-template-columns: 1fr; }
-  .learning-hub .wide { grid-column: span 1; }
-  .course-card { min-height: 290px; }
+  .learning-hub { margin: 0; padding: 14px; border-radius: 18px; }
+  .learning-title-row, .detail-title { flex-direction: column; }
+  .student-pill { width: 100%; }
+  .learning-card-grid, .detail-tools, .meta-grid { grid-template-columns: 1fr; }
+  .learning-card { min-height: 260px; }
+  .learning-card-footer { grid-template-columns: 1fr; }
+  .count-ring { display: none; }
+  .continue-button, .resource-action { width: 100%; }
+  .video-row { grid-template-columns: 96px minmax(0, 1fr); }
+  .mini-thumb { height: 58px; }
+  .editing-item { grid-template-columns: 1fr; }
 }
 `;
