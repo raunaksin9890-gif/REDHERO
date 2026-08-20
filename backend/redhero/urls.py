@@ -43,6 +43,7 @@ urlpatterns = [
     path("api/exams/<str:exam_id>/publish-results/", admin_api.exam_publish_results),
     path("api/exam-attempts/<str:attempt_id>/answers/", admin_api.exam_attempt_answer),
     path("api/exam-attempts/<str:attempt_id>/submit/", admin_api.exam_attempt_submit),
+    path("api/exam-attempts/<str:attempt_id>/violation/", admin_api.exam_attempt_violation),
     path("api/exam-attempts/<str:attempt_id>/evaluate/", admin_api.exam_attempt_evaluate),
     path("api/", include("core.urls")),
 ]

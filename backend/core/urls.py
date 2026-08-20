@@ -49,6 +49,7 @@ urlpatterns = [
     path("exams/<str:exam_id>/publish-results/", admin_api.exam_publish_results),
     path("exam-attempts/<str:attempt_id>/answers/", admin_api.exam_attempt_answer),
     path("exam-attempts/<str:attempt_id>/submit/", admin_api.exam_attempt_submit),
+    path("exam-attempts/<str:attempt_id>/violation/", admin_api.exam_attempt_violation),
     path("exam-attempts/<str:attempt_id>/evaluate/", admin_api.exam_attempt_evaluate),
     path("notifications/", views.notifications),
     path("notifications/mark-all-read/", views.notifications_mark_all_read),

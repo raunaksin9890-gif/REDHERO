@@ -58,7 +58,7 @@ function assertFrontendPermission(path, method) {
     { pattern: /^\/exams\/[^/]+\/(start)\//, roles: ["student"] },
     { pattern: /^\/exams\/[^/]+\/(questions|publish-results)\//, roles: ["super_admin", "teacher"] },
     { pattern: /^\/exams\//, roles: ["super_admin", "teacher"] },
-    { pattern: /^\/exam-attempts\/[^/]+\/(answers|submit)\//, roles: ["student"] },
+    { pattern: /^\/exam-attempts\/[^/]+\/(answers|submit|violation)\//, roles: ["student"] },
     { pattern: /^\/exam-attempts\/[^/]+\/evaluate\//, roles: ["super_admin", "teacher"] },
     { pattern: /^\/notifications\//, roles: ["super_admin", "teacher", "student"] },
     { pattern: /^\/contact-messages\//, methods: ["POST"], roles: ["student"] },

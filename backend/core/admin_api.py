@@ -2,6 +2,7 @@ import os
 from datetime import date, datetime, timedelta
 from uuid import uuid4
 
+from django.conf import settings
 from mongoengine.errors import NotUniqueError, ValidationError
 from rest_framework import status
 from rest_framework.decorators import api_view
@@ -41,7 +42,7 @@ from .models import (
 )
 from .notifications import notify_all_students, notify_student, notify_students_for_class
 from .security import current_user, hash_password, require_roles
-from .services import next_code, parse_date
+from .services import next_code, parse_date, schedule_now, schedule_time, store_schedule_time
 
 
 def ok(data=None, http_status=status.HTTP_200_OK):
@@ -1545,14 +1546,14 @@ def bool_value(value):
 
 
 def exam_window_state(exam, attempt=None):
-    now = datetime.utcnow()
+    now = schedule_now()
     if attempt and attempt.status in ["submitted", "evaluated", "expired"]:
         return "completed"
     if not exam.is_published:
         return "draft"
-    if now < exam.start_time:
+    if now < schedule_time(exam.start_time):
         return "upcoming"
-    if now > exam.end_time:
+    if now > schedule_time(exam.end_time):
         return "ended"
     return "active"
 
@@ -1567,22 +1568,37 @@ def require_roles_for_user(user, roles):
         raise PermissionDenied("You do not have permission to perform this action")
 
 
+def parse_exam_datetime(value, field_label):
+    try:
+        return parse_date(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field_label} must be a valid date and time.") from exc
+
+
 def exam_fields(data, row=None):
-    start_time = parse_date(data.get("start_time", row.start_time if row else None))
-    end_time = parse_date(data.get("end_time", row.end_time if row else None))
-    if not start_time or not end_time or end_time <= start_time:
-        raise ValueError("Invalid exam schedule")
-    duration = int(data.get("duration_minutes", row.duration_minutes if row else 60))
+    start_time = parse_exam_datetime(data.get("start_time", row.start_time if row else None), "Start time")
+    end_time = parse_exam_datetime(data.get("end_time", row.end_time if row else None), "End time")
+    if not start_time or not end_time:
+        raise ValueError("Start time and end time are required.")
+    if end_time <= start_time:
+        raise ValueError("End time must be after start time.")
+    try:
+        duration = int(data.get("duration_minutes", row.duration_minutes if row else 60))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Duration must be a valid number of minutes.") from exc
     if duration < 1:
-        raise ValueError("Invalid exam duration")
-    total_marks = float(data.get("total_marks", row.total_marks if row else 0))
-    passing_marks = float(data.get("passing_marks", row.passing_marks if row else 0) or 0)
+        raise ValueError("Duration must be at least 1 minute.")
+    try:
+        total_marks = float(data.get("total_marks", row.total_marks if row else 0))
+        passing_marks = float(data.get("passing_marks", row.passing_marks if row else 0) or 0)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Marks must be valid numbers.") from exc
     return {
         "name": data.get("name", row.name if row else ""),
         "class_level": str(data.get("class_level", row.class_level if row else "")),
         "subject": data.get("subject", row.subject if row else ""),
         "instructions": data.get("instructions", row.instructions if row else ""),
-        "exam_date": parse_date(data.get("exam_date", row.exam_date if row else start_time)),
+        "exam_date": parse_exam_datetime(data.get("exam_date", row.exam_date if row else start_time), "Exam date"),
         "start_time": start_time,
         "end_time": end_time,
         "duration_minutes": duration,
@@ -1664,6 +1680,12 @@ def attempt_json(attempt, include_answers=False, include_student=False, include_
         "descriptive_score": attempt.descriptive_score if include_scores else 0,
         "score": attempt.score if include_scores else 0,
         "feedback": attempt.feedback if include_scores else "",
+        "violation_count": attempt.violation_count,
+        "max_violations": settings.EXAM_MAX_SCREEN_VIOLATIONS,
+        "remaining_violations": max(0, settings.EXAM_MAX_SCREEN_VIOLATIONS - attempt.violation_count),
+        "last_violation_at": dt(attempt.last_violation_at),
+        "auto_submitted": attempt.auto_submitted,
+        "auto_submit_reason": attempt.auto_submit_reason,
     }
     if include_answers:
         data["answers"] = [answer_json(answer, include_marks=include_scores) for answer in attempt.answers]
@@ -1736,12 +1758,24 @@ def auto_grade_attempt(attempt):
     return ExamAttempt.objects(id=attempt.id).first()
 
 
-def finalize_attempt(attempt, status_value="submitted"):
+def finalize_attempt(attempt, status_value="submitted", auto_submitted=False, auto_submit_reason=""):
     if attempt.status in ["submitted", "evaluated", "expired"]:
         return attempt
-    now = datetime.utcnow()
-    attempt.update(status=status_value, submitted_at=now, updated_at=now)
+    now = store_schedule_time(schedule_now())
+    update_fields = {
+        "status": status_value,
+        "submitted_at": now,
+        "updated_at": datetime.utcnow(),
+    }
+    if auto_submitted:
+        update_fields["auto_submitted"] = True
+        update_fields["auto_submit_reason"] = auto_submit_reason
+    attempt.update(**update_fields)
     return auto_grade_attempt(ExamAttempt.objects(id=attempt.id).first())
+
+
+def anti_cheat_message(count):
+    return "Your exam was automatically submitted because you left the exam screen."
 
 
 @api_view(["GET", "POST", "PUT", "DELETE"])
@@ -1753,7 +1787,7 @@ def exams(request):
             value = request.GET.get(key)
             if value:
                 query = query(**{key: value})
-        return ok({"server_time": dt(datetime.utcnow()), "results": [exam_json(row, user, include_questions=user.role != ROLE_STUDENT, include_attempts=user.role != ROLE_STUDENT) for row in query.order_by("-start_time")]})
+        return ok({"server_time": dt(store_schedule_time(schedule_now())), "results": [exam_json(row, user, include_questions=user.role != ROLE_STUDENT, include_attempts=user.role != ROLE_STUDENT) for row in query.order_by("-start_time")]})
     require_roles_for_user(user, [ROLE_ADMIN, ROLE_TEACHER])
     data = request.data
     if request.method in ["PUT", "DELETE"]:
@@ -1768,8 +1802,8 @@ def exams(request):
         try:
             payload = exam_fields(data, row)
             enforce_teacher_class(user, payload["class_level"])
-        except (TypeError, ValueError):
-            return bad("Unable to save this exam.")
+        except (TypeError, ValueError) as exc:
+            return bad(str(exc) or "Unable to save this exam.")
         was_published = row.is_published
         row.update(**{f"set__{key}": value for key, value in payload.items()}, set__updated_at=datetime.utcnow())
         updated = Exam.objects(id=row.id).first()
@@ -1779,8 +1813,8 @@ def exams(request):
     try:
         payload = exam_fields(data)
         enforce_teacher_class(user, payload["class_level"])
-    except (TypeError, ValueError):
-        return bad("Unable to create this exam.")
+    except (TypeError, ValueError) as exc:
+        return bad(str(exc) or "Unable to create this exam.")
     row = Exam(**payload, created_by=user).save()
     if row.is_published:
         notify_students_for_class(row.class_level, "exam", "Exam Published", f"{row.name} is now available.", "/operations", "red", "assignment", row.id)
@@ -1836,19 +1870,21 @@ def exam_start(request, exam_id):
     exam = Exam.objects(id=exam_id, is_published=True).first()
     if not exam or not student or exam.class_level != student.class_level:
         return bad("Unable to load this exam.", status.HTTP_404_NOT_FOUND)
-    now = datetime.utcnow()
-    if now < exam.start_time:
+    now = schedule_now()
+    start_time = schedule_time(exam.start_time)
+    end_time = schedule_time(exam.end_time)
+    if now < start_time:
         return bad("This exam has not started yet.", status.HTTP_403_FORBIDDEN)
-    if now > exam.end_time:
+    if now > end_time:
         return bad("This exam has ended.", status.HTTP_403_FORBIDDEN)
     attempt = ExamAttempt.objects(exam=exam, student=student).first()
     if attempt:
-        if attempt.status == "in_progress" and now > attempt.deadline:
+        if attempt.status == "in_progress" and now > schedule_time(attempt.deadline):
             attempt = finalize_attempt(attempt, "expired")
-        return ok({"exam": exam_json(exam, user, include_questions=True), "attempt": attempt_json(attempt, include_answers=True, include_scores=exam.result_published), "server_time": dt(now)})
-    deadline = min(now + timedelta(minutes=exam.duration_minutes), exam.end_time)
-    attempt = ExamAttempt(exam=exam, student=student, started_at=now, deadline=deadline).save()
-    return ok({"exam": exam_json(exam, user, include_questions=True), "attempt": attempt_json(attempt, include_answers=True, include_scores=exam.result_published), "server_time": dt(now)}, status.HTTP_201_CREATED)
+        return ok({"exam": exam_json(exam, user, include_questions=True), "attempt": attempt_json(attempt, include_answers=True, include_scores=exam.result_published), "server_time": dt(store_schedule_time(now))})
+    deadline = min(now + timedelta(minutes=exam.duration_minutes), end_time)
+    attempt = ExamAttempt(exam=exam, student=student, started_at=store_schedule_time(now), deadline=store_schedule_time(deadline)).save()
+    return ok({"exam": exam_json(exam, user, include_questions=True), "attempt": attempt_json(attempt, include_answers=True, include_scores=exam.result_published), "server_time": dt(store_schedule_time(now))}, status.HTTP_201_CREATED)
 
 
 @api_view(["POST"])
@@ -1858,8 +1894,8 @@ def exam_attempt_answer(request, attempt_id):
     attempt = ExamAttempt.objects(id=attempt_id, student=student).first()
     if not attempt:
         return bad("Unable to load this exam.", status.HTTP_404_NOT_FOUND)
-    now = datetime.utcnow()
-    if attempt.status != "in_progress" or now > attempt.deadline or now > attempt.exam.end_time:
+    now = schedule_now()
+    if attempt.status != "in_progress" or now > schedule_time(attempt.deadline) or now > schedule_time(attempt.exam.end_time):
         finalize_attempt(attempt, "expired" if attempt.status == "in_progress" else attempt.status)
         return bad("This exam has ended.", status.HTTP_403_FORBIDDEN)
     qid = request.data.get("question_id")
@@ -1869,7 +1905,7 @@ def exam_attempt_answer(request, attempt_id):
         return bad("Unable to save your answer.")
     answers = [answer for answer in attempt.answers if answer.question_id != qid]
     answers.append(ExamAnswer(question_id=qid, answer=answer_text))
-    attempt.update(answers=answers, updated_at=now)
+    attempt.update(answers=answers, updated_at=datetime.utcnow())
     return ok({"attempt": attempt_json(ExamAttempt.objects(id=attempt.id).first(), include_answers=True, include_scores=attempt.exam.result_published)})
 
 
@@ -1880,9 +1916,36 @@ def exam_attempt_submit(request, attempt_id):
     attempt = ExamAttempt.objects(id=attempt_id, student=student).first()
     if not attempt:
         return bad("Unable to load this exam.", status.HTTP_404_NOT_FOUND)
-    status_value = "expired" if datetime.utcnow() > attempt.deadline or datetime.utcnow() > attempt.exam.end_time else "submitted"
+    now = schedule_now()
+    status_value = "expired" if now > schedule_time(attempt.deadline) or now > schedule_time(attempt.exam.end_time) else "submitted"
     attempt = finalize_attempt(attempt, status_value)
     return ok({"message": "Your exam has been submitted successfully.", "attempt": attempt_json(attempt, include_answers=True, include_scores=attempt.exam.result_published)})
+
+
+@api_view(["POST"])
+def exam_attempt_violation(request, attempt_id):
+    user = require_roles(request, [ROLE_STUDENT])
+    student = get_student_for_user(user)
+    attempt = ExamAttempt.objects(id=attempt_id, student=student).first()
+    if not attempt:
+        return bad("Unable to load this exam.", status.HTTP_404_NOT_FOUND)
+    now = schedule_now()
+    if attempt.status != "in_progress":
+        return ok({"message": "This exam has already been submitted.", "attempt": attempt_json(attempt, include_answers=True, include_scores=attempt.exam.result_published), "auto_submitted": attempt.auto_submitted})
+    if now > schedule_time(attempt.deadline) or now > schedule_time(attempt.exam.end_time):
+        attempt = finalize_attempt(attempt, "expired")
+        return ok({"message": "Time is over. Your exam has been submitted.", "attempt": attempt_json(attempt, include_answers=True, include_scores=attempt.exam.result_published), "auto_submitted": False})
+    updated = ExamAttempt.objects(id=attempt.id, student=student, status="in_progress").modify(
+        new=True,
+        inc__violation_count=1,
+        set__last_violation_at=store_schedule_time(now),
+        set__updated_at=datetime.utcnow(),
+    )
+    if not updated:
+        current = ExamAttempt.objects(id=attempt.id, student=student).first()
+        return ok({"message": "This exam has already been submitted.", "attempt": attempt_json(current, include_answers=True, include_scores=current.exam.result_published), "auto_submitted": current.auto_submitted})
+    updated = finalize_attempt(updated, "submitted", auto_submitted=True, auto_submit_reason="exam_screen_exit")
+    return ok({"message": anti_cheat_message(updated.violation_count), "attempt": attempt_json(updated, include_answers=True, include_scores=updated.exam.result_published), "auto_submitted": True})
 
 
 @api_view(["PUT"])

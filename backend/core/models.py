@@ -284,6 +284,10 @@ class ExamAttempt(Document):
     feedback = StringField(default="")
     evaluated_by = ReferenceField(User)
     evaluated_at = DateTimeField()
+    violation_count = IntField(default=0)
+    last_violation_at = DateTimeField()
+    auto_submitted = BooleanField(default=False)
+    auto_submit_reason = StringField(default="")
     updated_at = DateTimeField(default=datetime.utcnow)
 
     meta = {"collection": "ExamAttempts", "indexes": ["exam", "student", "status", "deadline"]}

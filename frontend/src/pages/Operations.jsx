@@ -23,7 +23,7 @@ import {
   WalletCards,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api/client.js";
 import { useAuth } from "../components/AuthProvider.jsx";
 import { ConfirmDialog, EmptyState, LoadingOverlay, useToast } from "../components/UX.jsx";
@@ -275,8 +275,8 @@ function ExamsDetail({ data, user, onSaved, setMessage }) {
     return true;
   });
   const activeCount = exams.filter((exam) => exam.status === "active").length;
-  const completed = exams.filter((exam) => exam.attempt?.submitted_at).length;
-  const publishedResults = exams.filter((exam) => exam.result_published).length;
+  const completed = exams.filter((exam) => ["completed", "ended"].includes(exam.status)).length;
+  const publishedResults = exams.filter((exam) => user.role === "student" ? exam.result_published && exam.attempt : exam.result_published).length;
 
   return (
     <div className="ops-detail-grid">
@@ -365,13 +365,14 @@ function ExamManager({ tab, exams, selected, setSelectedId, onSaved, setMessage 
       <EditableTable
         rows={exams}
         columns={[["Exam", (row) => row.name], ["Class", (row) => `Class ${row.class_level}`], ["Subject", (row) => row.subject], ["Window", (row) => `${formatDateTime(row.start_time)} - ${formatDateTime(row.end_time)}`], ["Status", (row) => <StatusBadge value={row.is_published ? "Published" : "Draft"} />], ["Results", (row) => <StatusBadge value={row.result_published ? "Published" : "Draft"} />]]}
-        editFields={[["name"], ["class_level"], ["subject"], ["start_time"], ["end_time"], ["duration_minutes"], ["passing_marks"]]}
+        editFields={[["name"], ["class_level"], ["subject"], ["start_time", "datetime-local"], ["end_time", "datetime-local"], ["duration_minutes"], ["passing_marks"]]}
         canEdit
         canDelete
         onSave={(row, draft) => api("/exams/", { method: "PUT", body: JSON.stringify({ ...row, ...draft, id: row.id }) })}
         onDelete={(row) => api(`/exams/?id=${row.id}`, { method: "DELETE" })}
         onSaved={onSaved}
         setMessage={setMessage}
+        successMessage="Exam updated successfully."
         extraActions={(row) => <ExamPublishActions exam={row} onSaved={onSaved} setMessage={setMessage} />}
       />
     </>
@@ -575,7 +576,7 @@ function ExamSubmissions({ exam, exams, setSelectedId, onSaved, setMessage }) {
   return (
     <>
       <div className="ops-tools"><Search size={16} /><select value={exam.id} onChange={(event) => setSelectedId(event.target.value)}>{exams.map((item) => <option key={item.id} value={item.id}>{item.name} / Class {item.class_level}</option>)}</select></div>
-      <CompactTable columns={["Student", "Status", "Score", "Submitted"]} rows={(exam.attempts || []).map((item) => [item.student?.name || "-", item.status, `${item.score || 0}/${exam.total_marks}`, formatDateTime(item.submitted_at)])} />
+      <CompactTable columns={["Student", "Status", "Score", "Violations", "Submitted"]} rows={(exam.attempts || []).map((item) => [item.student?.name || "-", item.status, `${item.score || 0}/${exam.total_marks}`, `${item.violation_count || 0}/${item.max_violations || 1}`, formatDateTime(item.submitted_at)])} />
       {(exam.attempts || []).length > 0 && (
         <div className="ops-tools"><Search size={16} /><select value={attempt?.id || ""} onChange={(event) => setSelectedAttemptId(event.target.value)}>{(exam.attempts || []).map((item) => <option key={item.id} value={item.id}>{item.student?.name || "Student"} / {item.status}</option>)}</select></div>
       )}
@@ -600,6 +601,11 @@ function EvaluationPanel({ exam, attempt, onSaved, setMessage }) {
   const answers = Object.fromEntries((attempt.answers || []).map((answer) => [answer.question_id, answer]));
   return (
     <section className="exam-evaluation">
+      <article>
+        <strong>Exam screen activity</strong>
+        <span>Violations: {attempt.violation_count || 0}/{attempt.max_violations || 1}</span>
+        <small>Auto submitted: {attempt.auto_submitted ? "Yes" : "No"}{attempt.auto_submit_reason ? ` / Reason: ${attempt.auto_submit_reason}` : ""}</small>
+      </article>
       {(exam.questions || []).map((question) => {
         const answer = answers[question.question_id] || {};
         const descriptive = ["short", "long"].includes(question.question_type);
@@ -628,11 +634,19 @@ function StudentExamCard({ exam, onSaved, setMessage }) {
   const [attempt, setAttempt] = useState(exam.attempt);
   const [activeExam, setActiveExam] = useState(exam);
   async function start() {
+    requestExamFullscreen().catch(() => {
+      setMessage("Fullscreen is recommended for exams. Continue only on the exam screen.");
+    });
     try {
       const data = await api(`/exams/${exam.id}/start/`, { method: "POST" });
       setAttempt(data.attempt);
       setActiveExam(data.exam);
-      setTaking(true);
+      if (data.attempt?.submitted_at) {
+        setMessage(data.attempt.auto_submitted ? "Your exam was automatically submitted because you left the exam screen." : "This exam has already been submitted.");
+        onSaved();
+      } else {
+        setTaking(true);
+      }
     } catch {
       setMessage(exam.status === "upcoming" ? "This exam has not started yet." : "Unable to load this exam.");
     }
@@ -650,6 +664,8 @@ function StudentExamCard({ exam, onSaved, setMessage }) {
       </div>
       <StatusBadge value={resultVisible ? "Result Published" : exam.status} />
       {exam.status === "active" && !attempt?.submitted_at && <button className="ops-red-button" onClick={start}>Start Exam</button>}
+      {exam.status === "upcoming" && <button className="ops-soft-button" type="button">Exam starts at {formatDateTime(exam.start_time)}</button>}
+      {exam.status === "ended" && !attempt?.submitted_at && <button className="ops-soft-button" type="button">Exam Ended</button>}
       {attempt?.submitted_at && <button className="ops-soft-button" type="button">Submitted</button>}
     </article>
   );
@@ -661,17 +677,82 @@ function ExamTakingPanel({ exam, attempt, setAttempt, setMessage, onSaved }) {
   const [submitting, setSubmitting] = useState(false);
   const [answers, setAnswers] = useState(() => Object.fromEntries((attempt.answers || []).map((answer) => [answer.question_id, answer.answer])));
   const [remaining, setRemaining] = useState(timeRemaining(attempt.deadline));
+  const lastViolationAt = useRef(0);
+  const reportingViolation = useRef(false);
+  const violationHandled = useRef(false);
+  const submitted = Boolean(attempt.submitted_at || attempt.status !== "in_progress");
   const question = (exam.questions || [])[index];
   useEffect(() => {
+    if (submitted) return undefined;
     const timer = window.setInterval(() => {
       const next = timeRemaining(attempt.deadline);
       setRemaining(next);
       if (next <= 0 && !submitting) submit(true);
     }, 1000);
     return () => window.clearInterval(timer);
-  }, [attempt.deadline, submitting]);
+  }, [attempt.deadline, submitting, submitted]);
+  useEffect(() => {
+    if (submitted) return undefined;
+    let ready = false;
+    const readyTimer = window.setTimeout(() => { ready = true; }, 900);
+    async function reportViolation(reason) {
+      if (!ready || violationHandled.current || reportingViolation.current || submitting) return;
+      const now = Date.now();
+      if (now - lastViolationAt.current < 1400) return;
+      lastViolationAt.current = now;
+      violationHandled.current = true;
+      reportingViolation.current = true;
+      try {
+        const data = await api(`/exam-attempts/${attempt.id}/violation/`, { method: "POST", body: JSON.stringify({ reason }) });
+        setAttempt(data.attempt);
+        setMessage(data.message || "Your exam was automatically submitted because you left the exam screen.");
+        if (data.auto_submitted || data.attempt?.submitted_at) {
+          setSubmitting(true);
+          onSaved();
+        }
+      } catch {
+        setMessage("Unable to submit after leaving the exam screen.");
+        violationHandled.current = false;
+      } finally {
+        reportingViolation.current = false;
+      }
+    }
+    function onVisibilityChange() {
+      if (document.hidden) reportViolation("visibility_hidden");
+    }
+    function onBlur() {
+      reportViolation("window_blur");
+    }
+    function onFullscreenChange() {
+      if (!document.fullscreenElement) reportViolation("fullscreen_exit");
+    }
+    function blockClipboard(event) {
+      event.preventDefault();
+    }
+    function blockShortcut(event) {
+      const key = event.key?.toLowerCase();
+      if ((event.ctrlKey || event.metaKey) && ["c", "v", "x", "p", "s"].includes(key)) event.preventDefault();
+    }
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    window.addEventListener("blur", onBlur);
+    document.addEventListener("fullscreenchange", onFullscreenChange);
+    document.addEventListener("copy", blockClipboard);
+    document.addEventListener("paste", blockClipboard);
+    document.addEventListener("contextmenu", blockClipboard);
+    document.addEventListener("keydown", blockShortcut);
+    return () => {
+      window.clearTimeout(readyTimer);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
+      window.removeEventListener("blur", onBlur);
+      document.removeEventListener("fullscreenchange", onFullscreenChange);
+      document.removeEventListener("copy", blockClipboard);
+      document.removeEventListener("paste", blockClipboard);
+      document.removeEventListener("contextmenu", blockClipboard);
+      document.removeEventListener("keydown", blockShortcut);
+    };
+  }, [attempt.id, submitted, submitting, setAttempt, setMessage, onSaved]);
   async function saveAnswer(qid = question?.question_id, value = answers[qid]) {
-    if (!qid) return;
+    if (!qid || submitted || submitting) return;
     try {
       const data = await api(`/exam-attempts/${attempt.id}/answers/`, { method: "POST", body: JSON.stringify({ question_id: qid, answer: value || "" }) });
       setAttempt(data.attempt);
@@ -684,8 +765,9 @@ function ExamTakingPanel({ exam, attempt, setAttempt, setMessage, onSaved }) {
     setSubmitting(true);
     setConfirmSubmit(false);
     try {
-      await api(`/exam-attempts/${attempt.id}/submit/`, { method: "POST" });
-      setMessage(auto ? "Time is over. Your exam has been submitted." : "Your exam has been submitted successfully.");
+      const data = await api(`/exam-attempts/${attempt.id}/submit/`, { method: "POST" });
+      setAttempt(data.attempt);
+      setMessage(data.attempt?.auto_submitted ? "Your exam was automatically submitted because you left the exam screen." : auto ? "Time is over. Your exam has been submitted." : "Your exam has been submitted successfully.");
       onSaved();
     } catch {
       setMessage("Unable to submit this exam.");
@@ -703,20 +785,27 @@ function ExamTakingPanel({ exam, attempt, setAttempt, setMessage, onSaved }) {
         <h3>{question.text}</h3>
         {["mcq", "true_false"].includes(question.question_type) ? (
           <div className="exam-options">
-            {(question.options || []).map((option) => <button className={answers[question.question_id] === option ? "active" : ""} key={option} onClick={() => { setAnswers({ ...answers, [question.question_id]: option }); saveAnswer(question.question_id, option); }}>{option}</button>)}
+            {(question.options || []).map((option) => <button className={answers[question.question_id] === option ? "active" : ""} key={option} disabled={submitted || submitting} onClick={() => { setAnswers({ ...answers, [question.question_id]: option }); saveAnswer(question.question_id, option); }}>{option}</button>)}
           </div>
         ) : (
-          <textarea value={answers[question.question_id] || ""} onChange={(event) => setAnswers({ ...answers, [question.question_id]: event.target.value })} onBlur={() => saveAnswer()} placeholder="Write your answer" />
+          <textarea value={answers[question.question_id] || ""} disabled={submitted || submitting} onChange={(event) => setAnswers({ ...answers, [question.question_id]: event.target.value })} onBlur={() => saveAnswer()} placeholder="Write your answer" />
         )}
+        <small>Exam screen lock active</small>
       </article>
       <div className="ops-actions">
         <button className="ops-soft-button" disabled={index === 0} onClick={() => setIndex(Math.max(0, index - 1))}>Previous</button>
-        <button className="ops-soft-button" onClick={() => { saveAnswer(); setIndex(Math.min(exam.questions.length - 1, index + 1)); }}>Save & Next</button>
-        <button className="ops-red-button" disabled={submitting} onClick={() => setConfirmSubmit(true)}>Submit Exam</button>
+        <button className="ops-soft-button" disabled={submitted || submitting} onClick={() => { saveAnswer(); setIndex(Math.min(exam.questions.length - 1, index + 1)); }}>Save & Next</button>
+        <button className="ops-red-button" disabled={submitted || submitting} onClick={() => setConfirmSubmit(true)}>Submit Exam</button>
         <ConfirmDialog open={confirmSubmit} title="Submit exam?" message="Are you sure you want to submit the exam?" confirmLabel="Submit" onCancel={() => setConfirmSubmit(false)} onConfirm={() => submit(false)} />
       </div>
     </section>
   );
+}
+
+function requestExamFullscreen() {
+  const element = document.documentElement;
+  if (!element.requestFullscreen || document.fullscreenElement) return Promise.resolve();
+  return element.requestFullscreen();
 }
 
 function TimetableDetail({ data, user, onSaved, setMessage }) {
@@ -1026,24 +1115,29 @@ function TimetableGrid({ rows, user, onSaved, setMessage }) {
   );
 }
 
-function EditableTable({ rows, columns, editFields, canEdit, canDelete, onSave, onDelete, onSaved, setMessage, extraActions }) {
+function EditableTable({ rows, columns, editFields, canEdit, canDelete, onSave, onDelete, onSaved, setMessage, extraActions, successMessage = "Operations record updated" }) {
   const [editing, setEditing] = useState(null);
   const [draft, setDraft] = useState({});
   const [confirm, setConfirm] = useState(null);
   const [search, setSearch] = useState("");
+  const [saving, setSaving] = useState(false);
   const toast = useToast();
   const visible = rows.filter((row) => JSON.stringify(row).toLowerCase().includes(search.toLowerCase()));
 
   async function save(row) {
+    if (saving) return;
+    setSaving(true);
     try {
       await onSave(row, draft);
       setEditing(null);
-      setMessage("Operations record updated");
-      toast?.show("Operations record updated");
+      setMessage(successMessage);
+      toast?.show(successMessage);
       onSaved();
     } catch (err) {
       setMessage(err.message);
       toast?.show(err.message, "error");
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -1075,13 +1169,13 @@ function EditableTable({ rows, columns, editFields, canEdit, canDelete, onSave, 
                     <div className="ops-actions">
                       {editing === row.id ? (
                         <>
-                          {editFields.map(([field, type, choices]) => type === "select" ? <select key={field} value={draft[field] ?? ""} onChange={(event) => setDraft({ ...draft, [field]: event.target.value })}>{choices.map((choice) => <option key={choice} value={choice}>{choice}</option>)}</select> : <input key={field} value={draft[field] ?? ""} onChange={(event) => setDraft({ ...draft, [field]: event.target.value })} />)}
-                          <button className="ops-icon" title="Save" onClick={() => save(row)}><Save size={15} /></button>
+                          {editFields.map(([field, type, choices]) => type === "select" ? <select key={field} value={draft[field] ?? ""} onChange={(event) => setDraft({ ...draft, [field]: event.target.value })}>{choices.map((choice) => <option key={choice} value={choice}>{choice}</option>)}</select> : <input key={field} type={type === "datetime-local" ? "datetime-local" : "text"} value={draft[field] ?? ""} onChange={(event) => setDraft({ ...draft, [field]: event.target.value })} />)}
+                          <button className="ops-icon" title="Save" disabled={saving} onClick={() => save(row)}><Save size={15} /></button>
                           <button className="ops-icon" title="Cancel" onClick={() => setEditing(null)}><X size={15} /></button>
                         </>
                       ) : (
                         <>
-                          {canEdit && <button className="ops-icon" title="Edit" onClick={() => { setEditing(row.id); setDraft(Object.fromEntries(editFields.map(([field]) => [field, row[field] ?? ""]))); }}><Pencil size={15} /></button>}
+                          {canEdit && <button className="ops-icon" title="Edit" onClick={() => { setEditing(row.id); setDraft(Object.fromEntries(editFields.map(([field, type]) => [field, type === "datetime-local" ? toDateTimeLocal(row[field]) : row[field] ?? ""]))); }}><Pencil size={15} /></button>}
                           {canDelete && <button className="ops-icon danger" title="Delete" onClick={() => setConfirm(row)}><Trash2 size={15} /></button>}
                           {extraActions?.(row)}
                         </>
