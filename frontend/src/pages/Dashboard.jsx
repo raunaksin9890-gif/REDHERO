@@ -2,6 +2,7 @@ import { ArrowRight, BarChart3, Bookmark, BookOpen, CalendarCheck, ChartNoAxesCo
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client.js";
+import dashboardHero from "../assets/dashboard-hero.png";
 import { useAuth } from "../components/AuthProvider.jsx";
 import { EmptyState, SkeletonGrid } from "../components/UX.jsx";
 
@@ -74,7 +75,6 @@ export function Dashboard() {
       <StudentAnalytics data={data} extras={studentExtra} />
       <NoticeList notices={data.latest_notices} featured />
       <section className="student-card-grid">
-        <AttendanceCard percentage={data.attendance_percentage} />
         <MarksCard items={data.marks || []} />
         <AssignmentsCard items={studentExtra.assignments.slice(0, 4)} />
         <TimetablePanel items={studentExtra.timetables} />
@@ -489,7 +489,20 @@ function CurrentAffairsCard({ items = [] }) {
         {items.length === 0 && <CardEmpty title="No current affairs" message="Latest news cards will appear here." />}
         {items.map((item) => (
           <article className="news-resource" key={item.id}>
-            <div className="news-thumb"><Sparkles size={22} /></div>
+            <div className={`news-thumb current-affair-thumb ${item.image_url ? "has-image" : ""}`}>
+              {item.image_url && (
+                <img
+                  src={item.image_url}
+                  alt=""
+                  loading="lazy"
+                  onError={(event) => {
+                    event.currentTarget.style.display = "none";
+                    event.currentTarget.parentElement?.classList.remove("has-image");
+                  }}
+                />
+              )}
+              <Sparkles size={22} />
+            </div>
             <div>
               <span className="subject-chip">{item.category}</span>
               <strong>{item.title}</strong>
@@ -815,6 +828,425 @@ const dashboardPremiumStyles = `
     position: static;
     width: fit-content;
     margin-top: 12px;
+  }
+}
+.student-premium {
+  position: relative;
+  isolation: isolate;
+  min-height: calc(100vh - 112px);
+  margin: -8px;
+  padding: clamp(14px, 2vw, 22px);
+  border-radius: 8px;
+  color: #f8fafc;
+  background:
+    linear-gradient(rgba(225, 29, 72, .055) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(225, 29, 72, .045) 1px, transparent 1px),
+    linear-gradient(135deg, #07070b 0%, #0b0d13 44%, #110810 100%);
+  background-size: 72px 72px, 72px 72px, auto;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.04), 0 28px 90px rgba(0,0,0,.32);
+}
+.student-premium::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  border-radius: inherit;
+  background:
+    radial-gradient(ellipse at 45% 0%, rgba(214,31,58,.22), transparent 42%),
+    linear-gradient(180deg, rgba(255,255,255,.035), transparent 24%);
+  pointer-events: none;
+}
+.student-premium::after {
+  content: "";
+  position: absolute;
+  inset: 86px 18px auto 18px;
+  z-index: -1;
+  height: 220px;
+  border-radius: 8px;
+  background:
+    repeating-linear-gradient(104deg, transparent 0 16px, rgba(248,113,113,.08) 17px, transparent 18px),
+    linear-gradient(90deg, rgba(214,31,58,.20), transparent 72%);
+  opacity: .42;
+  transform: perspective(900px) rotateX(58deg);
+  transform-origin: top;
+  filter: blur(.2px);
+  pointer-events: none;
+}
+.student-premium .student-top-row {
+  grid-template-columns: minmax(0, 1.85fr) minmax(280px, .72fr);
+  gap: 14px;
+  margin-bottom: 14px;
+}
+.student-premium .panel,
+.student-premium .student-welcome-card,
+.student-premium .student-feature-card,
+.student-premium .premium-stat-card,
+.student-premium .analytics-card {
+  border-radius: 8px;
+  border: 1px solid rgba(244,63,94,.28);
+  background:
+    linear-gradient(180deg, rgba(25,18,25,.88), rgba(9,10,16,.94)),
+    linear-gradient(135deg, rgba(255,255,255,.06), rgba(255,255,255,0));
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.055),
+    inset 0 -1px 0 rgba(244,63,94,.08),
+    0 20px 54px rgba(0,0,0,.34),
+    0 0 34px rgba(214,31,58,.075);
+  backdrop-filter: blur(16px);
+  transition: transform 210ms ease, box-shadow 210ms ease, border-color 210ms ease, background 210ms ease;
+}
+.student-premium .panel:hover,
+.student-premium .student-feature-card:hover,
+.student-premium .premium-stat-card:hover,
+.student-premium .analytics-card:hover {
+  transform: translateY(-3px);
+  border-color: rgba(244,63,94,.46);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.07),
+    0 26px 68px rgba(0,0,0,.42),
+    0 0 42px rgba(214,31,58,.12);
+}
+.student-premium .student-welcome-card {
+  min-height: 286px;
+  padding: clamp(22px, 3.2vw, 34px);
+  overflow: hidden;
+  background-image:
+    linear-gradient(90deg, rgba(10,9,15,.98) 0%, rgba(42,10,22,.88) 54%, rgba(13,9,14,.94) 100%),
+    url("${dashboardHero}");
+  background-size: cover;
+  background-position: center right;
+}
+.student-premium .student-welcome-card::before {
+  content: "";
+  position: absolute;
+  inset: auto -8% -44% 32%;
+  height: 210px;
+  background:
+    repeating-linear-gradient(96deg, transparent 0 13px, rgba(244,63,94,.14) 14px, transparent 15px),
+    linear-gradient(90deg, transparent, rgba(225,29,72,.24), transparent);
+  transform: perspective(780px) rotateX(62deg);
+  transform-origin: bottom;
+  opacity: .75;
+}
+.student-premium .student-welcome-card::after {
+  content: "Current semester";
+  right: 24px;
+  top: 24px;
+  border-radius: 999px;
+  background: rgba(244,63,94,.13);
+  border-color: rgba(244,63,94,.24);
+  color: #fecdd3;
+  letter-spacing: .08em;
+}
+.student-premium .student-avatar {
+  width: 76px;
+  height: 76px;
+  border-radius: 8px;
+  border: 1px solid rgba(255,255,255,.14);
+  background: linear-gradient(135deg, #f43f5e, #8f1026);
+  box-shadow: 0 18px 42px rgba(214,31,58,.20), inset 0 1px 0 rgba(255,255,255,.18);
+}
+.student-premium .student-welcome-copy {
+  position: relative;
+  z-index: 1;
+}
+.student-premium .student-welcome-copy .eyebrow {
+  color: #fb7185;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: .08em;
+}
+.student-premium .student-welcome-card h2 {
+  max-width: 720px;
+  margin-top: 8px;
+  font-size: clamp(34px, 4.6vw, 58px);
+  line-height: 1;
+  letter-spacing: 0;
+  text-shadow: 0 18px 42px rgba(0,0,0,.36);
+}
+.student-premium .student-welcome-card p {
+  color: #dbe2ee;
+  font-weight: 750;
+}
+.student-premium .summary-chip-row {
+  position: relative;
+  z-index: 1;
+  margin-top: auto;
+}
+.student-premium .summary-chip-row span {
+  min-height: 36px;
+  border-radius: 8px;
+  color: #f8fafc;
+  background: rgba(255,255,255,.07);
+  border: 1px solid rgba(255,255,255,.12);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.06);
+}
+.student-premium .welcome-glow {
+  display: none;
+}
+.student-premium .quick-actions-card {
+  min-height: 286px;
+  padding: 18px;
+}
+.student-premium .quick-actions-card h2,
+.student-premium .notice-board h2,
+.student-premium .student-card-header h2,
+.student-premium .analytics-card header span {
+  font-size: 16px;
+  letter-spacing: 0;
+}
+.student-premium .quick-action-grid {
+  gap: 10px;
+}
+.student-premium .quick-action {
+  min-height: 52px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, rgba(190,18,60,.24), rgba(15,23,42,.44));
+  border: 1px solid rgba(244,63,94,.20);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.055);
+}
+.student-premium .quick-action svg:first-child {
+  width: 34px;
+  height: 34px;
+  padding: 8px;
+  border-radius: 8px;
+  color: #fff;
+  background: linear-gradient(135deg, #e11d48, #7f1020);
+  box-shadow: 0 10px 24px rgba(225,29,72,.20);
+}
+.student-premium .quick-action:hover {
+  transform: translateX(3px);
+  border-color: rgba(244,63,94,.44);
+  background: linear-gradient(135deg, rgba(225,29,72,.34), rgba(15,23,42,.56));
+}
+.student-premium .premium-stat-grid {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 14px;
+}
+.student-premium .premium-stat-card {
+  min-height: 128px;
+  padding: 14px;
+}
+.student-premium .premium-stat-card::before,
+.student-premium .analytics-card::before {
+  width: 130px;
+  height: 130px;
+  background: linear-gradient(135deg, rgba(244,63,94,.18), transparent 68%);
+  filter: blur(14px);
+}
+.student-premium .premium-stat-icon {
+  width: 38px;
+  height: 38px;
+  border-radius: 8px;
+  color: #fecdd3;
+  background: rgba(225,29,72,.16);
+  border: 1px solid rgba(244,63,94,.18);
+}
+.student-premium .premium-stat-card > span {
+  margin-top: 12px;
+  color: #aeb6c4;
+  font-size: 12px;
+}
+.student-premium .premium-stat-card strong {
+  margin-top: 6px;
+  font-size: 28px;
+}
+.student-premium .premium-stat-card small {
+  color: #cbd5e1;
+}
+.student-premium .dashboard-analytics {
+  gap: 14px;
+  margin-bottom: 14px;
+}
+.student-premium .analytics-card {
+  min-height: 292px;
+  padding: 18px;
+}
+.student-premium .dashboard-ring {
+  width: 170px;
+  height: 170px;
+  background:
+    radial-gradient(circle, #090a0f 54%, transparent 55%),
+    conic-gradient(#f43f5e calc(var(--value) * 1%), rgba(255,255,255,.08) 0);
+  box-shadow:
+    inset 0 0 0 11px rgba(7,8,13,.94),
+    inset 0 0 24px rgba(244,63,94,.22),
+    0 18px 42px rgba(0,0,0,.34),
+    0 0 40px rgba(225,29,72,.20);
+}
+.student-premium .dashboard-ring strong {
+  font-size: 38px;
+}
+.student-premium .marks-bars,
+.student-premium .weekly-activity {
+  height: 164px;
+  border-radius: 8px;
+  gap: 14px;
+  background:
+    linear-gradient(rgba(255,255,255,.045) 1px, transparent 1px),
+    rgba(4,7,13,.50);
+  background-size: 100% 25%;
+  border-color: rgba(255,255,255,.09);
+}
+.student-premium .marks-bars i {
+  border-radius: 7px 7px 3px 3px;
+  background: linear-gradient(180deg, #fb7185, #be123c);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.20), 0 10px 26px rgba(225,29,72,.18);
+}
+.student-premium .marks-bars i:nth-child(1) { background: linear-gradient(180deg, #60a5fa, #1d4ed8); }
+.student-premium .marks-bars i:nth-child(2) { background: linear-gradient(180deg, #c084fc, #7e22ce); }
+.student-premium .marks-bars i:nth-child(4) { background: linear-gradient(180deg, #fbbf24, #d97706); }
+.student-premium .weekly-activity span {
+  border-radius: 7px 7px 3px 3px;
+  background: linear-gradient(180deg, #f43f5e, #7f1020);
+}
+.student-premium .course-progress-line {
+  height: 8px;
+  background: rgba(255,255,255,.08);
+}
+.student-premium .student-card-grid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+}
+.student-premium .student-feature-card {
+  min-height: 276px;
+  padding: 16px;
+}
+.student-premium .student-card-header {
+  margin-bottom: 12px;
+}
+.student-premium .student-card-header > div {
+  gap: 9px;
+}
+.student-premium .student-card-header svg {
+  width: 34px;
+  height: 34px;
+  padding: 8px;
+  border-radius: 8px;
+  color: #fecdd3;
+  background: rgba(225,29,72,.14);
+  border: 1px solid rgba(244,63,94,.18);
+}
+.student-premium .notice-board {
+  border-radius: 8px;
+  margin-bottom: 14px;
+}
+.student-premium .notice-item,
+.student-premium .note-resource,
+.student-premium .assignment-resource,
+.student-premium .mark-resource,
+.student-premium .news-resource,
+.student-premium .video-resource,
+.student-premium .accordion-item,
+.student-premium .premium-empty {
+  border-radius: 8px;
+  background: rgba(6,8,14,.56);
+  border: 1px solid rgba(255,255,255,.09);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.035);
+}
+.student-premium .note-resource:hover,
+.student-premium .assignment-resource:hover,
+.student-premium .mark-resource:hover,
+.student-premium .news-resource:hover,
+.student-premium .video-resource:hover,
+.student-premium .accordion-item:hover {
+  border-color: rgba(244,63,94,.28);
+  background: rgba(22,13,20,.72);
+}
+.student-premium .mini-button {
+  min-height: 32px;
+  border-radius: 7px;
+  background: rgba(255,255,255,.065);
+  border-color: rgba(255,255,255,.10);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.045);
+}
+.student-premium .mini-button.red,
+.student-premium .primary {
+  background: linear-gradient(135deg, #e11d48, #881337);
+  border-color: rgba(244,63,94,.38);
+  box-shadow: 0 12px 28px rgba(225,29,72,.18);
+}
+.student-premium .subject-chip,
+.student-premium .notice-badge,
+.student-premium .due-badge,
+.student-premium .status-badge,
+.student-premium .grade-badge {
+  border-radius: 999px;
+}
+.student-premium .video-thumb,
+.student-premium .news-thumb,
+.student-premium .pdf-thumb,
+.student-premium .empty-illustration {
+  border-radius: 8px;
+}
+.student-premium .current-affair-thumb {
+  position: relative;
+  overflow: hidden;
+}
+.student-premium .current-affair-thumb img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.student-premium .current-affair-thumb::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, rgba(8,7,12,.18), rgba(136,19,55,.34));
+  opacity: 0;
+}
+.student-premium .current-affair-thumb.has-image::after {
+  opacity: 1;
+}
+.student-premium .current-affair-thumb svg {
+  position: relative;
+  z-index: 1;
+}
+.student-premium .current-affair-thumb.has-image svg {
+  opacity: 0;
+}
+.student-premium .floating-action {
+  background: linear-gradient(135deg, #e11d48, #7f1020);
+  box-shadow: 0 20px 46px rgba(225,29,72,.30), 0 0 28px rgba(244,63,94,.18);
+}
+@media (max-width: 1280px) {
+  .student-premium .premium-stat-grid,
+  .student-premium .student-card-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+@media (max-width: 980px) {
+  .student-premium .student-top-row,
+  .student-premium .dashboard-analytics {
+    grid-template-columns: 1fr;
+  }
+  .student-premium .premium-stat-grid,
+  .student-premium .student-card-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@media (max-width: 640px) {
+  .student-premium {
+    margin: 0;
+    padding: 12px;
+    border-radius: 8px;
+  }
+  .student-premium .premium-stat-grid,
+  .student-premium .student-card-grid {
+    grid-template-columns: 1fr;
+  }
+  .student-premium .student-welcome-card {
+    min-height: 300px;
+    background-position: center;
+  }
+  .student-premium .student-welcome-card h2 {
+    font-size: clamp(32px, 12vw, 44px);
+  }
+  .student-premium .summary-chip-row {
+    display: grid;
   }
 }
 `;
