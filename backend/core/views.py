@@ -529,7 +529,12 @@ def students(request):
         query = Student.objects
         if user.role == ROLE_TEACHER:
             teacher = get_teacher_for_user(user)
-            query = query(class_level__in=teacher.assigned_classes if teacher else [])
+            assigned_classes = [
+                str(item).strip()
+                for item in (teacher.assigned_classes if teacher else [])
+                if str(item).strip()
+            ]
+            query = query(class_level__in=assigned_classes)
         return ok({"results": [student_json(row) for row in query.order_by("student_id")]})
     require_roles(request, [ROLE_ADMIN])
     data = request.data

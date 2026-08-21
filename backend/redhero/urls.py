@@ -10,8 +10,9 @@ urlpatterns = [
     path("api/auth/users/<str:user_id>/reset-password/", admin_api.reset_password),
     path("api/auth/users/<str:user_id>/force-password-change/", admin_api.force_password_change),
     path("api/dashboard/", views.dashboard),
-    path("api/students/", views.students),
-    path("api/students/<str:student_id>/", views.student_detail),
+    # Student routes are intentionally provided by core.urls below. Keeping a
+    # second mapping here previously allowed an older admin-only view to take
+    # precedence and blocked teachers from seeing their assigned classes.
     path("api/teachers/", views.teachers),
     path("api/teachers/<str:teacher_id>/", views.teacher_detail),
     path("api/attendance/", admin_api.attendance),
