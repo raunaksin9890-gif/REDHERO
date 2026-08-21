@@ -10,6 +10,7 @@ import {
   Pencil,
   Play,
   PlayCircle,
+  Printer,
   Save,
   Search,
   Send,
@@ -21,7 +22,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { api } from "../api/client.js";
+import { API_URL, api } from "../api/client.js";
 import { useAuth } from "../components/AuthProvider.jsx";
 import { ConfirmDialog, EmptyState, LoadingOverlay, useToast } from "../components/UX.jsx";
 
@@ -301,6 +302,8 @@ function ResourceDetailPage({ items, onSaved, section, selectedItem, setMessage,
 
 function VideoLearningPage({ items, onSaved, section, selectedItem, setMessage, setSelectedId, user }) {
   const selected = selectedItem || items[0];
+  const selectedVideoUrl = resolveMediaUrl(selected?.youtube_url);
+  const selectedEmbedUrl = embedUrl(selected?.youtube_url);
   return (
     <div className="video-layout">
       <section className="video-list-panel">
@@ -326,10 +329,14 @@ function VideoLearningPage({ items, onSaved, section, selectedItem, setMessage, 
         {selected ? (
           <>
             <div className="video-stage">
-              {embedUrl(selected.youtube_url) ? (
-                <iframe src={embedUrl(selected.youtube_url)} title={selected.title} allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowFullScreen />
+              {selectedEmbedUrl ? (
+                <iframe src={selectedEmbedUrl} title={selected.title} allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" allowFullScreen />
+              ) : selectedVideoUrl ? (
+                <video controls playsInline preload="metadata" src={selectedVideoUrl} title={selected.title}>
+                  Your browser cannot play this video. Use the open or download button below.
+                </video>
               ) : (
-                <div className="video-placeholder"><Play size={34} /><span>Video link available</span></div>
+                <div className="video-placeholder"><Play size={34} /><span>No video attached</span></div>
               )}
             </div>
             <SelectedResource section={section} item={selected} user={user} onSaved={onSaved} setMessage={setMessage} />
@@ -343,6 +350,7 @@ function VideoLearningPage({ items, onSaved, section, selectedItem, setMessage, 
 }
 
 function SelectedResource({ section, item, user, onSaved, setMessage }) {
+  const toast = useToast();
   return (
     <article className="selected-resource">
       <header>
@@ -358,15 +366,30 @@ function SelectedResource({ section, item, user, onSaved, setMessage }) {
 
       {section.key === "notes" && (
         <div className="detail-section">
-          <h3>PDFs and Attachments</h3>
-          {item.pdf_url ? <a className="resource-action" href={item.pdf_url} target="_blank" rel="noreferrer"><Download size={17} /> Open PDF</a> : <span className="muted-line">No PDF attached.</span>}
+          <h3>Files and Attachments</h3>
+          {item.pdf_url ? (
+            <>
+              <span className="attachment-name">{item.file_name || "Linked learning file"}{item.file_size ? ` · ${formatFileSize(item.file_size)}` : ""}</span>
+              <div className="resource-action-row">
+                <a className="resource-action" href={resolveMediaUrl(item.pdf_url)} target="_blank" rel="noreferrer"><ExternalLink size={17} /> Open file</a>
+                <button className="resource-action secondary-resource-action" onClick={() => downloadNote(item, toast)} type="button"><Download size={17} /> Download</button>
+                {canPrintNote(item) && <button className="resource-action secondary-resource-action" onClick={() => printNote(item, toast)} type="button"><Printer size={17} /> Print</button>}
+              </div>
+            </>
+          ) : <span className="muted-line">No file attached.</span>}
         </div>
       )}
 
       {section.key === "videos" && (
         <div className="detail-section">
-          <h3>Video Link</h3>
-          {item.youtube_url ? <a className="resource-action" href={item.youtube_url} target="_blank" rel="noreferrer"><ExternalLink size={17} /> Open video</a> : <span className="muted-line">No video link attached.</span>}
+          <h3>Video</h3>
+          {item.file_name && <span className="attachment-name">{item.file_name}{item.file_size ? ` · ${formatFileSize(item.file_size)}` : ""}</span>}
+          {item.youtube_url ? (
+            <div className="resource-action-row">
+              <a className="resource-action" href={resolveMediaUrl(item.youtube_url)} target="_blank" rel="noreferrer"><ExternalLink size={17} /> Open video</a>
+              {item.file_name && <button className="resource-action secondary-resource-action" onClick={() => downloadVideo(item, toast)} type="button"><Download size={17} /> Download</button>}
+            </div>
+          ) : <span className="muted-line">No video attached.</span>}
         </div>
       )}
 
@@ -396,6 +419,101 @@ function SelectedResource({ section, item, user, onSaved, setMessage }) {
   );
 }
 
+function resolveMediaUrl(value = "") {
+  if (!value) return "";
+  try {
+    const apiRoot = API_URL.replace(/\/api\/?$/, "");
+    return new URL(value, `${apiRoot}/`).toString();
+  } catch {
+    return value;
+  }
+}
+
+function noteDownloadName(item) {
+  if (item.file_name) return item.file_name;
+  const safeTitle = (item.title || "redhero-note").replace(/[^a-z0-9_-]+/gi, "-").replace(/^-+|-+$/g, "").toLowerCase();
+  const extension = fileExtension(item.pdf_url) || ".pdf";
+  return `${safeTitle || "redhero-note"}${extension}`;
+}
+
+function downloadNote(item, toast) {
+  const url = resolveMediaUrl(item.pdf_url);
+  if (!url) {
+    toast?.show("No file is attached to this note.", "error");
+    return;
+  }
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = noteDownloadName(item);
+  link.target = "_blank";
+  link.rel = "noreferrer";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  toast?.show("File download started");
+}
+
+function printNote(item, toast) {
+  const url = resolveMediaUrl(item.pdf_url);
+  if (!url) {
+    toast?.show("No printable file is attached to this note.", "error");
+    return;
+  }
+  const printWindow = window.open(url, "_blank");
+  if (!printWindow) {
+    toast?.show("Allow pop-ups to print this PDF.", "error");
+    return;
+  }
+  printWindow.opener = null;
+  window.setTimeout(() => {
+    try {
+      printWindow.focus();
+      printWindow.print();
+    } catch {
+      toast?.show("PDF opened—use Ctrl+P to print.", "info");
+    }
+  }, 900);
+}
+
+function downloadVideo(item, toast) {
+  const url = resolveMediaUrl(item.youtube_url);
+  if (!url) {
+    toast?.show("No video file is attached.", "error");
+    return;
+  }
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = item.file_name || `${(item.title || "redhero-video").replace(/[^a-z0-9_-]+/gi, "-")}${fileExtension(item.youtube_url) || ".mp4"}`;
+  link.target = "_blank";
+  link.rel = "noreferrer";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  toast?.show("Video download started");
+}
+
+function fileExtension(value = "") {
+  try {
+    const pathname = new URL(value, window.location.origin).pathname;
+    const match = pathname.match(/\.[a-z0-9]{1,8}$/i);
+    return match?.[0]?.toLowerCase() || "";
+  } catch {
+    return "";
+  }
+}
+
+function canPrintNote(item) {
+  if (!item.file_type) return true;
+  return item.file_type === "application/pdf" || item.file_type.startsWith("image/");
+}
+
+function formatFileSize(value) {
+  const bytes = Number(value) || 0;
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 function MetaTile({ label, value }) {
   return (
     <div className="meta-tile">
@@ -410,8 +528,32 @@ function ContentForm({ compact = false, initialType, user, onSaved, setMessage }
   const fallbackType = allowedEndpoints.some((item) => item.key === initialType) ? initialType : allowedEndpoints[0].key;
   const [type, setType] = useState(fallbackType);
   const [form, setForm] = useState({ title: "", class_level: "10", subject: "Mathematics", chapter: "", description: "", url: "", body: "" });
+  const [file, setFile] = useState(null);
+  const [fileInputKey, setFileInputKey] = useState(0);
   const [progress, setProgress] = useState(0);
   const toast = useToast();
+
+  function changeType(nextType) {
+    setType(nextType);
+    setFile(null);
+    setFileInputKey((value) => value + 1);
+  }
+
+  function chooseFile(event) {
+    const selected = event.target.files?.[0] || null;
+    if (!selected) {
+      setFile(null);
+      return;
+    }
+    const maxBytes = type === "videos" ? 500 * 1024 * 1024 : 50 * 1024 * 1024;
+    if (selected.size > maxBytes) {
+      toast?.show(`${type === "videos" ? "Video" : "File"} is too large. Maximum ${type === "videos" ? "500" : "50"} MB.`, "error");
+      event.target.value = "";
+      setFile(null);
+      return;
+    }
+    setFile(selected);
+  }
 
   async function submit(event) {
     event.preventDefault();
@@ -424,12 +566,25 @@ function ContentForm({ compact = false, initialType, user, onSaved, setMessage }
     };
     const path = endpoints.find((item) => item.key === type).path;
     try {
-      setProgress(45);
-      await api(path, { method: "POST", body: JSON.stringify(bodyByType[type]) });
+      if (["notes", "videos"].includes(type) && !file && !form.url.trim()) {
+        throw new Error(`Paste a ${type === "notes" ? "file" : "video"} URL or choose a file to upload`);
+      }
+      setProgress(30);
+      let requestBody = JSON.stringify(bodyByType[type]);
+      if (file && ["notes", "videos"].includes(type)) {
+        const multipart = new FormData();
+        Object.entries(bodyByType[type]).forEach(([key, value]) => multipart.append(key, value ?? ""));
+        multipart.append("file", file);
+        requestBody = multipart;
+        setProgress(60);
+      }
+      await api(path, { method: "POST", body: requestBody });
       setProgress(100);
       setMessage("Published successfully");
       toast?.show("Published successfully");
       setForm({ title: "", class_level: "10", subject: "Mathematics", chapter: "", description: "", url: "", body: "" });
+      setFile(null);
+      setFileInputKey((value) => value + 1);
       onSaved();
       window.setTimeout(() => setProgress(0), 700);
     } catch (err) {
@@ -443,21 +598,40 @@ function ContentForm({ compact = false, initialType, user, onSaved, setMessage }
     <section className={`publish-panel ${compact ? "compact" : ""}`}>
       <h2><Send size={20} /> Publish Learning Content</h2>
       <form className="content-form" onSubmit={submit}>
-        <select value={type} onChange={(event) => setType(event.target.value)}>{allowedEndpoints.map((item) => <option key={item.key} value={item.key}>{item.title}</option>)}</select>
+        <select value={type} onChange={(event) => changeType(event.target.value)}>{allowedEndpoints.map((item) => <option key={item.key} value={item.key}>{item.title}</option>)}</select>
         <input placeholder="Title" value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} required />
         {["notes", "videos", "notices"].includes(type) && <input placeholder="Class" value={form.class_level} onChange={(event) => setForm({ ...form, class_level: event.target.value })} />}
         {["notes", "videos"].includes(type) && <input placeholder="Subject" value={form.subject} onChange={(event) => setForm({ ...form, subject: event.target.value })} />}
         {["notes", "videos"].includes(type) && <input placeholder="Chapter" value={form.chapter} onChange={(event) => setForm({ ...form, chapter: event.target.value })} />}
         {type === "videos" && <input placeholder="Description" value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} />}
         {["notes", "videos"].includes(type) && (
-          <label className="upload-drop">
-            <UploadCloud size={18} />
-            <input placeholder={type === "notes" ? "PDF URL" : "YouTube URL"} value={form.url} onChange={(event) => setForm({ ...form, url: event.target.value })} required />
-          </label>
+          <div className="source-picker">
+            <label className="url-source">
+              <span>{type === "notes" ? "PDF / file URL" : "YouTube / video URL"}</span>
+              <input placeholder="https://... (optional if uploading)" value={form.url} onChange={(event) => setForm({ ...form, url: event.target.value })} required={!file} />
+            </label>
+            <span className="source-divider">OR</span>
+            <label className="direct-upload">
+              <UploadCloud size={22} />
+              <span><strong>{file ? "Change selected file" : `Upload ${type === "videos" ? "video" : "PDF or file"}`}</strong><small>Choose from mobile or laptop · Max {type === "videos" ? "500" : "50"} MB</small></span>
+              <input
+                key={fileInputKey}
+                type="file"
+                accept={type === "videos" ? "video/mp4,video/webm,video/quicktime,.m4v,.avi,.mkv" : ".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.csv,.rtf,.odt,.ods,.odp,.jpg,.jpeg,.png,.webp"}
+                onChange={chooseFile}
+              />
+            </label>
+            {file && (
+              <div className="selected-upload">
+                <span><strong>{file.name}</strong><small>{formatFileSize(file.size)}</small></span>
+                <button type="button" aria-label="Remove selected file" onClick={() => { setFile(null); setFileInputKey((value) => value + 1); }}><X size={16} /></button>
+              </div>
+            )}
+          </div>
         )}
         {["notices", "blogs", "currentAffairs"].includes(type) && <textarea placeholder="Content" value={form.body} onChange={(event) => setForm({ ...form, body: event.target.value })} required />}
         {progress > 0 && <div className="progress"><span style={{ width: `${progress}%` }} /></div>}
-        <button className="primary">Publish</button>
+        <button className="primary" disabled={progress > 0}> {progress > 0 ? "Uploading..." : "Publish"}</button>
       </form>
     </section>
   );
@@ -466,6 +640,7 @@ function ContentForm({ compact = false, initialType, user, onSaved, setMessage }
 function ContentItem({ section, item, user, onSaved, setMessage }) {
   const [editing, setEditing] = useState(false);
   const [confirmOpen, setConfirmOpen] = useState(false);
+  const [replacementFile, setReplacementFile] = useState(null);
   const [draft, setDraft] = useState({
     title: item.title || "",
     class_level: item.class_level || "10",
@@ -489,8 +664,17 @@ function ContentItem({ section, item, user, onSaved, setMessage }) {
 
   async function save() {
     try {
-      await api(section.path, { method: "PUT", body: JSON.stringify(payload()) });
+      const values = payload();
+      let requestBody = JSON.stringify(values);
+      if (replacementFile && ["notes", "videos"].includes(section.key)) {
+        const multipart = new FormData();
+        Object.entries(values).forEach(([key, value]) => multipart.append(key, value ?? ""));
+        multipart.append("file", replacementFile);
+        requestBody = multipart;
+      }
+      await api(section.path, { method: "PUT", body: requestBody });
       setEditing(false);
+      setReplacementFile(null);
       setMessage("Updated successfully");
       toast?.show("Updated successfully");
       onSaved();
@@ -524,10 +708,21 @@ function ContentItem({ section, item, user, onSaved, setMessage }) {
         {["notes", "videos"].includes(section.key) && <input value={draft.chapter} onChange={(event) => setDraft({ ...draft, chapter: event.target.value })} />}
         {section.key === "videos" && <input value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} />}
         {["notes", "videos"].includes(section.key) && <input value={draft.url} onChange={(event) => setDraft({ ...draft, url: event.target.value })} />}
+        {["notes", "videos"].includes(section.key) && (
+          <label className="edit-file-upload">
+            <UploadCloud size={17} />
+            <span>{replacementFile ? replacementFile.name : `Replace with a new ${section.key === "videos" ? "video" : "file"}`}</span>
+            <input
+              type="file"
+              accept={section.key === "videos" ? "video/mp4,video/webm,video/quicktime,.m4v,.avi,.mkv" : ".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.csv,.rtf,.odt,.ods,.odp,.jpg,.jpeg,.png,.webp"}
+              onChange={(event) => setReplacementFile(event.target.files?.[0] || null)}
+            />
+          </label>
+        )}
         {["notices", "blogs", "currentAffairs"].includes(section.key) && <textarea value={draft.body} onChange={(event) => setDraft({ ...draft, body: event.target.value })} />}
         <div className="manage-actions">
           <button className="icon-button" title="Save" onClick={save}><Save size={16} /></button>
-          <button className="icon-button" title="Cancel" onClick={() => setEditing(false)}><X size={16} /></button>
+          <button className="icon-button" title="Cancel" onClick={() => { setEditing(false); setReplacementFile(null); }}><X size={16} /></button>
         </div>
       </article>
     );
@@ -869,11 +1064,13 @@ const learningHubStyles = `
   border: 1px solid rgba(255,255,255,.12);
   background: #070a10;
 }
-.video-stage iframe {
+.video-stage iframe,
+.video-stage video {
   width: 100%;
   height: 100%;
   border: 0;
 }
+.video-stage video { display: block; object-fit: contain; background: #000000; }
 .video-placeholder {
   height: 100%;
   display: grid;
@@ -933,7 +1130,12 @@ const learningHubStyles = `
 .resource-action {
   width: fit-content;
 }
+.resource-action-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.resource-action-row button { cursor: pointer; }
+.secondary-resource-action { color: #e2e8f0; background: rgba(255,255,255,.07); border-color: rgba(255,255,255,.14); box-shadow: none; }
+.secondary-resource-action:hover { border-color: rgba(248,113,113,.34); background: rgba(214,31,58,.12); }
 .muted-line { color: #aeb6c4; }
+.attachment-name { color: #cbd5e1; font-size: 13px; overflow-wrap: anywhere; }
 .meta-grid {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
@@ -956,6 +1158,65 @@ const learningHubStyles = `
 .publish-panel.compact {
   margin: 0 0 18px;
 }
+.source-picker {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: stretch;
+  gap: 10px;
+}
+.url-source {
+  display: grid;
+  gap: 7px;
+  padding: 11px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(10,12,18,.42);
+}
+.url-source > span { color: #cbd5e1; font-size: 12px; font-weight: 900; }
+.url-source input { width: 100%; }
+.source-divider { align-self: center; color: #94a3b8; font-size: 11px; font-weight: 950; }
+.direct-upload, .edit-file-upload {
+  position: relative;
+  min-height: 76px;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 12px;
+  border-radius: 10px;
+  border: 1px dashed rgba(248,113,113,.50);
+  background: rgba(214,31,58,.09);
+  color: #fecdd3;
+  cursor: pointer;
+  overflow: hidden;
+}
+.direct-upload:hover, .edit-file-upload:hover { border-color: #fb7185; background: rgba(214,31,58,.15); }
+.direct-upload > span { display: grid; gap: 4px; }
+.direct-upload strong { color: #ffffff; font-size: 14px; }
+.direct-upload small { color: #aeb6c4; line-height: 1.35; }
+.direct-upload input, .edit-file-upload input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+}
+.selected-upload {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 9px;
+  background: rgba(22,163,74,.12);
+  border: 1px solid rgba(74,222,128,.28);
+}
+.selected-upload > span { min-width: 0; display: grid; gap: 2px; }
+.selected-upload strong { color: #dcfce7; overflow-wrap: anywhere; }
+.selected-upload small { color: #86efac; }
+.selected-upload button { width: 34px; height: 34px; padding: 0; display: grid; place-items: center; background: transparent; color: #dcfce7; border: 1px solid rgba(134,239,172,.26); }
 .learning-hub input,
 .learning-hub select,
 .learning-hub textarea {
@@ -999,6 +1260,7 @@ const learningHubStyles = `
 .editing-item textarea, .editing-item .manage-actions {
   grid-column: 1 / -1;
 }
+.edit-file-upload { grid-column: 1 / -1; min-height: 52px; }
 @keyframes learningPageIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes learningCardIn { from { opacity: 0; transform: translateY(14px) scale(.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
 @media (max-width: 1180px) {
@@ -1011,6 +1273,8 @@ const learningHubStyles = `
   .learning-title-row, .detail-title { flex-direction: column; }
   .student-pill { width: 100%; }
   .learning-card-grid, .detail-tools, .meta-grid { grid-template-columns: 1fr; }
+  .source-picker { grid-template-columns: 1fr; }
+  .source-divider { justify-self: center; }
   .learning-card { min-height: 260px; }
   .learning-card-footer { grid-template-columns: 1fr; }
   .count-ring { display: none; }
@@ -1076,6 +1340,7 @@ html[data-theme="light"] .learning-hub .count-ring strong { color: #172033; }
 html[data-theme="light"] .learning-hub .detail-head { border-bottom-color: rgba(203,213,225,.82); }
 html[data-theme="light"] .learning-hub .back-link,
 html[data-theme="light"] .learning-hub .filter-button,
+html[data-theme="light"] .learning-hub .secondary-resource-action,
 html[data-theme="light"] .learning-hub .secondary,
 html[data-theme="light"] .learning-hub .icon-button {
   color: #334155;
@@ -1102,6 +1367,19 @@ html[data-theme="light"] .learning-hub textarea {
   background: #ffffff;
   border-color: rgba(203,213,225,.9);
 }
+html[data-theme="light"] .learning-hub .url-source {
+  background: #f8fafc;
+  border-color: #d9e0ea;
+}
+html[data-theme="light"] .learning-hub .url-source > span,
+html[data-theme="light"] .learning-hub .attachment-name { color: #475569; }
+html[data-theme="light"] .learning-hub .direct-upload,
+html[data-theme="light"] .learning-hub .edit-file-upload { background: #fff1f2; color: #9f1239; border-color: #fda4af; }
+html[data-theme="light"] .learning-hub .direct-upload strong { color: #172033; }
+html[data-theme="light"] .learning-hub .direct-upload small { color: #64748b; }
+html[data-theme="light"] .learning-hub .selected-upload { background: #f0fdf4; }
+html[data-theme="light"] .learning-hub .selected-upload strong { color: #166534; }
+html[data-theme="light"] .learning-hub .selected-upload small { color: #15803d; }
 html[data-theme="light"] .learning-hub .detail-search input { background: transparent; }
 html[data-theme="light"] .learning-hub input::placeholder,
 html[data-theme="light"] .learning-hub textarea::placeholder { color: #94a3b8; }

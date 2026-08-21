@@ -4,11 +4,17 @@ import logging
 import os
 import re
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from urllib.parse import unquote, urlparse
+from uuid import uuid4
 
 import jwt
 from django.conf import settings
+from django.core.files.storage import default_storage
 from django.http import HttpResponse
+from django.utils.text import get_valid_filename
 from mongoengine.errors import NotUniqueError, ValidationError
+from mongoengine.queryset.visitor import Q
 from rest_framework.decorators import api_view
 from rest_framework.exceptions import ParseError, PermissionDenied
 from rest_framework.response import Response
@@ -34,6 +40,8 @@ from .models import (
     NoteBookmark,
     Notice,
     Notification,
+    PracticeSession,
+    QuestionBankQuestion,
     Student,
     Teacher,
     Timetable,
@@ -62,6 +70,16 @@ logger = logging.getLogger(__name__)
 FORGOT_PASSWORD_VERIFY_ERROR = "Unable to verify the provided account details."
 FORGOT_PASSWORD_TOKEN_MINUTES = 15
 FORGOT_PASSWORD_ATTEMPTS = {}
+
+LEARNING_DOCUMENT_EXTENSIONS = {
+    ".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx",
+    ".txt", ".csv", ".rtf", ".odt", ".ods", ".odp", ".jpg",
+    ".jpeg", ".png", ".webp",
+}
+LEARNING_VIDEO_EXTENSIONS = {".mp4", ".webm", ".mov", ".m4v", ".avi", ".mkv"}
+LEARNING_DOCUMENT_MAX_BYTES = 50 * 1024 * 1024
+LEARNING_VIDEO_MAX_BYTES = 500 * 1024 * 1024
+LEARNING_UPLOAD_FIELDS = {"file_name", "file_type", "file_size", "storage_name"}
 
 
 def ok(data=None, http_status=status.HTTP_200_OK):
@@ -157,6 +175,102 @@ def enforce_student_class(user, class_level):
         student = get_student_for_user(user)
         if not student or student.class_level != class_level:
             raise PermissionDenied("Students can only access their own class content")
+
+
+def visible_class_levels(user):
+    if user.role == ROLE_ADMIN:
+        return list(CLASSES)
+    if user.role == ROLE_TEACHER:
+        return teacher_assigned_classes(user)
+    student = get_student_for_user(user)
+    return [student.class_level] if student else []
+
+
+def practice_streak_json(student):
+    raw_dates = PracticeSession.objects(student=student, status="submitted").distinct("session_date")
+    practice_dates = set()
+    for value in raw_dates:
+        try:
+            practice_dates.add(datetime.strptime(value, "%Y-%m-%d").date())
+        except (TypeError, ValueError):
+            continue
+
+    today = datetime.utcnow().date()
+    yesterday = today - timedelta(days=1)
+    cursor = today if today in practice_dates else yesterday if yesterday in practice_dates else None
+    current_streak = 0
+    while cursor and cursor in practice_dates:
+        current_streak += 1
+        cursor -= timedelta(days=1)
+
+    longest_streak = 0
+    running = 0
+    previous = None
+    for practice_date in sorted(practice_dates):
+        running = running + 1 if previous and practice_date == previous + timedelta(days=1) else 1
+        longest_streak = max(longest_streak, running)
+        previous = practice_date
+
+    return {
+        "current_streak": current_streak,
+        "longest_streak": longest_streak,
+        "practiced_today": today in practice_dates,
+        "total_practice_days": len(practice_dates),
+        "last_practice": max(practice_dates).isoformat() if practice_dates else None,
+    }
+
+
+def class_leaderboard(class_level, current_student=None, limit=10):
+    students = list(Student.objects(class_level=class_level).order_by("name"))
+    student_ids = {str(student.id) for student in students}
+    practice_totals = {}
+    mark_totals = {}
+
+    for session in PracticeSession.objects(class_level=class_level, status="submitted"):
+        student_id = str(session.student.id) if session.student else ""
+        if student_id not in student_ids:
+            continue
+        bucket = practice_totals.setdefault(student_id, {"correct": 0, "total": 0, "sessions": 0})
+        bucket["correct"] += int(session.correct_count or 0)
+        bucket["total"] += int(session.total_questions or 0)
+        bucket["sessions"] += 1
+
+    for mark in Marks.objects(class_level=class_level):
+        student_id = str(mark.student.id) if mark.student else ""
+        if student_id not in student_ids:
+            continue
+        bucket = mark_totals.setdefault(student_id, {"obtained": 0.0, "maximum": 0.0})
+        bucket["obtained"] += float(mark.marks_obtained or 0)
+        bucket["maximum"] += float(mark.max_marks or 0)
+
+    rows = []
+    for student in students:
+        student_id = str(student.id)
+        practice = practice_totals.get(student_id, {"correct": 0, "total": 0, "sessions": 0})
+        marks = mark_totals.get(student_id, {"obtained": 0, "maximum": 0})
+        practice_score = round((practice["correct"] / practice["total"]) * 100, 2) if practice["total"] else None
+        marks_score = round((marks["obtained"] / marks["maximum"]) * 100, 2) if marks["maximum"] else None
+        available_scores = [score for score in [practice_score, marks_score] if score is not None]
+        combined_score = round(sum(available_scores) / len(available_scores), 2) if available_scores else 0
+        rows.append(
+            {
+                "student_id": student_id,
+                "name": student.name,
+                "roll_number": student.roll_number,
+                "division": student.division,
+                "score": combined_score,
+                "practice_score": practice_score,
+                "marks_score": marks_score,
+                "practice_sessions": practice["sessions"],
+                "is_current": bool(current_student and student.id == current_student.id),
+            }
+        )
+
+    rows.sort(key=lambda row: (-row["score"], row["name"].lower()))
+    for index, row in enumerate(rows, start=1):
+        row["rank"] = index
+    current_rank = next((row["rank"] for row in rows if row["is_current"]), None)
+    return rows[:limit], current_rank
 
 
 def create_user(email, name, role, password=DEFAULT_PASSWORD, first_login=True):
@@ -564,6 +678,7 @@ def dashboard(request):
     present = len([row for row in attendance if row.status == "present"])
     marks = list(Marks.objects(student=student))
     notices = Notice.objects(class_level__in=[student.class_level, "all"]).order_by("-created_at")[:5]
+    leaderboard, leaderboard_rank = class_leaderboard(student.class_level, current_student=student)
     return ok(
         {
             "profile": student_json(student),
@@ -571,9 +686,92 @@ def dashboard(request):
             "marks": [marks_json(row) for row in marks[-5:]],
             "latest_notices": [notice_json(row) for row in notices],
             "current_affairs": [simple_json(row, ["title", "summary", "category", "image_url", "published_on"]) for row in CurrentAffair.objects.order_by("-published_on")[:4]],
-            "recent_videos": [simple_json(row, ["title", "class_level", "subject", "chapter", "youtube_url"]) for row in Video.objects(class_level=student.class_level).order_by("-created_at")[:4]],
+            "recent_videos": [simple_json(row, ["title", "class_level", "subject", "chapter", "youtube_url", "file_name", "file_type", "file_size"]) for row in Video.objects(class_level=student.class_level).order_by("-created_at")[:4]],
+            "study_streak": practice_streak_json(student),
+            "leaderboard": leaderboard,
+            "leaderboard_class": student.class_level,
+            "leaderboard_rank": leaderboard_rank,
         }
     )
+
+
+@api_view(["GET"])
+def global_search(request):
+    user = require_roles(request, [ROLE_ADMIN, ROLE_TEACHER, ROLE_STUDENT])
+    search_text = request.GET.get("q", "").strip()
+    if len(search_text) < 2:
+        return ok({"query": search_text, "results": []})
+
+    class_levels = visible_class_levels(user)
+    if not class_levels:
+        return ok({"query": search_text, "results": []})
+
+    student_query = Student.objects(class_level__in=class_levels).filter(
+        Q(name__icontains=search_text)
+        | Q(student_id__icontains=search_text)
+        | Q(roll_number__icontains=search_text)
+    )
+    note_query = Note.objects(class_level__in=class_levels).filter(
+        Q(title__icontains=search_text)
+        | Q(subject__icontains=search_text)
+        | Q(chapter__icontains=search_text)
+    )
+    notice_query = Notice.objects(class_level__in=class_levels + ["all"]).filter(
+        Q(title__icontains=search_text) | Q(body__icontains=search_text)
+    )
+    question_query = QuestionBankQuestion.objects(class_level__in=class_levels).filter(
+        Q(text__icontains=search_text)
+        | Q(subject__icontains=search_text)
+        | Q(chapter__icontains=search_text)
+    )
+
+    if user.role == ROLE_TEACHER:
+        teacher = get_teacher_for_user(user)
+        if teacher and teacher.subjects:
+            question_query = question_query(subject__in=teacher.subjects)
+
+    results = []
+    for student in student_query.order_by("name")[:5]:
+        results.append(
+            {
+                "id": str(student.id),
+                "type": "student",
+                "title": student.name,
+                "subtitle": f"Class {student.class_level} {student.division} · Roll {student.roll_number}",
+                "path": "/directory" if user.role != ROLE_STUDENT else "",
+            }
+        )
+    for note in note_query.order_by("-created_at")[:5]:
+        results.append(
+            {
+                "id": str(note.id),
+                "type": "note",
+                "title": note.title,
+                "subtitle": f"Class {note.class_level} · {note.subject} · {note.chapter}",
+                "path": f"/learning/notes/{note.id}",
+            }
+        )
+    for notice in notice_query.order_by("-created_at")[:5]:
+        results.append(
+            {
+                "id": str(notice.id),
+                "type": "notice",
+                "title": notice.title,
+                "subtitle": notice.body[:120],
+                "path": f"/learning/notice-board/{notice.id}",
+            }
+        )
+    for question in question_query.order_by("-created_at")[:5]:
+        results.append(
+            {
+                "id": str(question.id),
+                "type": "question",
+                "title": question.text,
+                "subtitle": f"Class {question.class_level} · {question.subject} · {question.chapter}",
+                "path": "/practice-progress",
+            }
+        )
+    return ok({"query": search_text, "results": results})
 
 
 @api_view(["GET", "POST", "PUT", "DELETE"])
@@ -638,6 +836,72 @@ def attendance(request):
         row.id,
     )
     return ok({"message": "Attendance marked", "attendance": attendance_json(row)}, status.HTTP_201_CREATED)
+
+
+@api_view(["POST"])
+def attendance_bulk(request):
+    user = require_roles(request, [ROLE_ADMIN, ROLE_TEACHER])
+    class_level = str(request.data.get("class_level", "")).strip()
+    if not class_level:
+        return bad("Class is required")
+    enforce_teacher_class(user, class_level)
+
+    students = list(Student.objects(class_level=class_level).order_by("roll_number"))
+    if not students:
+        return bad("No students found for this class", status.HTTP_404_NOT_FOUND)
+
+    absent_ids = {str(value) for value in request.data.get("absent_student_ids", [])}
+    allowed_ids = {str(student.id) for student in students}
+    if not absent_ids.issubset(allowed_ids):
+        return bad("One or more selected students are outside this class")
+
+    attendance_date = parse_date(request.data.get("date"))
+    if not attendance_date:
+        return bad("Attendance date is required")
+
+    now = datetime.utcnow()
+    results = []
+    present_count = 0
+    absent_count = 0
+    for student in students:
+        attendance_status = "absent" if str(student.id) in absent_ids else "present"
+        previous = Attendance.objects(student=student, date=attendance_date).first()
+        previous_status = previous.status if previous else None
+        row = Attendance.objects(student=student, date=attendance_date).modify(
+            upsert=True,
+            new=True,
+            set__class_level=student.class_level,
+            set__status=attendance_status,
+            set__marked_by=user,
+            set__updated_at=now,
+            set_on_insert__created_at=now,
+        )
+        results.append(attendance_json(row))
+        if attendance_status == "present":
+            present_count += 1
+        else:
+            absent_count += 1
+        if previous_status != attendance_status:
+            notify_student(
+                student,
+                "attendance",
+                "Attendance",
+                f"Your attendance for {attendance_date.strftime('%d %b %Y')} was marked {attendance_status}.",
+                "/operations",
+                "green" if attendance_status == "present" else "red",
+                "attendance",
+                row.id,
+            )
+
+    return ok(
+        {
+            "message": f"Attendance saved for {len(students)} students",
+            "present_count": present_count,
+            "absent_count": absent_count,
+            "results": results,
+        },
+        status.HTTP_201_CREATED,
+    )
 
 
 @api_view(["GET"])
@@ -987,8 +1251,87 @@ def contact_messages(request):
     return ok({"message": "Your message has been sent successfully.", "contact": contact_message_json(row)}, status.HTTP_201_CREATED)
 
 
+def learning_upload_config(model):
+    if model == Note:
+        return {
+            "url_field": "pdf_url",
+            "folder": "notes",
+            "extensions": LEARNING_DOCUMENT_EXTENSIONS,
+            "max_bytes": LEARNING_DOCUMENT_MAX_BYTES,
+            "label": "document",
+        }
+    if model == Video:
+        return {
+            "url_field": "youtube_url",
+            "folder": "videos",
+            "extensions": LEARNING_VIDEO_EXTENSIONS,
+            "max_bytes": LEARNING_VIDEO_MAX_BYTES,
+            "label": "video",
+        }
+    return None
+
+
+def validate_learning_url(value, label):
+    value = str(value or "").strip()
+    if not value:
+        raise ValueError(f"Add a {label} URL or choose a file to upload")
+    parsed = urlparse(value)
+    if parsed.scheme not in ["http", "https"] and not value.startswith(settings.MEDIA_URL):
+        raise ValueError("Only secure http/https links are allowed")
+    return value
+
+
+def store_learning_upload(model, uploaded_file):
+    config = learning_upload_config(model)
+    if not config:
+        raise ValueError("File upload is not supported for this content type")
+
+    original_name = get_valid_filename(os.path.basename(str(uploaded_file.name).replace("\\", "/")))
+    extension = Path(original_name).suffix.lower()
+    if extension not in config["extensions"]:
+        allowed = ", ".join(sorted(config["extensions"]))
+        raise ValueError(f"Unsupported {config['label']} file. Allowed: {allowed}")
+
+    size = int(getattr(uploaded_file, "size", 0) or 0)
+    if size <= 0:
+        raise ValueError("The selected file is empty")
+    if size > config["max_bytes"]:
+        limit_mb = config["max_bytes"] // (1024 * 1024)
+        raise ValueError(f"{config['label'].title()} must be smaller than {limit_mb} MB")
+
+    safe_stem = get_valid_filename(Path(original_name).stem)[:80] or config["label"]
+    dated_folder = datetime.utcnow().strftime("%Y/%m")
+    storage_name = default_storage.save(
+        f"learning/{config['folder']}/{dated_folder}/{uuid4().hex}-{safe_stem}{extension}",
+        uploaded_file,
+    )
+    return {
+        config["url_field"]: default_storage.url(storage_name),
+        "file_name": original_name,
+        "file_type": str(getattr(uploaded_file, "content_type", "") or ""),
+        "file_size": size,
+        "storage_name": storage_name,
+    }
+
+
+def delete_learning_upload(row):
+    storage_name = str(getattr(row, "storage_name", "") or "").strip()
+    if not storage_name:
+        # Backward-compatible cleanup for uploads created before storage_name existed.
+        value = str(getattr(row, "pdf_url", "") or getattr(row, "youtube_url", "") or "")
+        media_path = unquote(urlparse(value).path)
+        if media_path.startswith(settings.MEDIA_URL):
+            candidate = media_path[len(settings.MEDIA_URL):].lstrip("/")
+            if candidate.startswith("learning/"):
+                storage_name = candidate
+    if storage_name and default_storage.exists(storage_name):
+        default_storage.delete(storage_name)
+
+
 def content_view(model, fields):
     owner_field = "uploaded_by" if model in [Video, Note] else "author" if model == Blog else "created_by"
+    upload_config = learning_upload_config(model)
+    read_only_fields = {"created_at", "uploaded_by"} | LEARNING_UPLOAD_FIELDS
 
     @api_view(["GET", "POST", "PUT", "DELETE"])
     def handler(request):
@@ -1011,15 +1354,36 @@ def content_view(model, fields):
                 enforce_teacher_class(user, row.class_level)
             enforce_owner(user, row, owner_field)
             if request.method == "DELETE":
+                if upload_config:
+                    delete_learning_upload(row)
                 row.delete()
                 return ok({"message": "Item deleted"})
-            payload = {field: request.data.get(field, getattr(row, field)) for field in fields if field not in ["created_at", "uploaded_by"]}
+            payload = {field: request.data.get(field, getattr(row, field)) for field in fields if field not in read_only_fields}
             if "class_level" in payload:
                 payload["class_level"] = str(payload["class_level"])
                 enforce_teacher_class(user, payload["class_level"])
-            row.update(**{f"set__{key}": value for key, value in payload.items()})
+            old_storage_name = str(getattr(row, "storage_name", "") or "")
+            uploaded_file = request.FILES.get("file") if upload_config else None
+            new_upload = None
+            try:
+                if uploaded_file:
+                    new_upload = store_learning_upload(model, uploaded_file)
+                    payload.update(new_upload)
+                elif upload_config and upload_config["url_field"] in request.data:
+                    url_field = upload_config["url_field"]
+                    payload[url_field] = validate_learning_url(payload.get(url_field), upload_config["label"])
+                    if payload[url_field] != getattr(row, url_field):
+                        payload.update({"file_name": "", "file_type": "", "file_size": 0, "storage_name": ""})
+                row.update(**{f"set__{key}": value for key, value in payload.items()})
+            except (OSError, ValueError, ValidationError) as exc:
+                if new_upload and new_upload.get("storage_name"):
+                    default_storage.delete(new_upload["storage_name"])
+                return bad(str(exc))
+            if old_storage_name and (uploaded_file or payload.get("storage_name") == ""):
+                if default_storage.exists(old_storage_name):
+                    default_storage.delete(old_storage_name)
             return ok({"item": simple_json(model.objects(id=row.id).first(), fields)})
-        payload = {field: request.data.get(field) for field in fields if field not in ["created_at", "uploaded_by"]}
+        payload = {field: request.data.get(field) for field in fields if field not in read_only_fields}
         if "class_level" in payload:
             payload["class_level"] = str(payload["class_level"])
             enforce_teacher_class(user, payload["class_level"])
@@ -1027,7 +1391,21 @@ def content_view(model, fields):
             payload["uploaded_by"] = user
         else:
             payload["author" if model == Blog else "created_by"] = user
-        row = model(**payload).save()
+        new_upload = None
+        try:
+            if upload_config:
+                uploaded_file = request.FILES.get("file")
+                if uploaded_file:
+                    new_upload = store_learning_upload(model, uploaded_file)
+                    payload.update(new_upload)
+                else:
+                    url_field = upload_config["url_field"]
+                    payload[url_field] = validate_learning_url(payload.get(url_field), upload_config["label"])
+            row = model(**payload).save()
+        except (OSError, ValueError, ValidationError) as exc:
+            if new_upload and new_upload.get("storage_name"):
+                default_storage.delete(new_upload["storage_name"])
+            return bad(str(exc))
         if model == Video:
             notify_students_for_class(
                 row.class_level,
@@ -1055,8 +1433,8 @@ def content_view(model, fields):
     return handler
 
 
-videos = content_view(Video, ["title", "class_level", "subject", "chapter", "description", "youtube_url", "created_at"])
-notes = content_view(Note, ["title", "class_level", "subject", "chapter", "pdf_url", "created_at"])
+videos = content_view(Video, ["title", "class_level", "subject", "chapter", "description", "youtube_url", "file_name", "file_type", "file_size", "created_at"])
+notes = content_view(Note, ["title", "class_level", "subject", "chapter", "pdf_url", "file_name", "file_type", "file_size", "created_at"])
 
 
 @api_view(["GET", "POST", "DELETE"])

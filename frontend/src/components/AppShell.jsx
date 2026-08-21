@@ -1,4 +1,4 @@
-import { Bell, Bot, BookOpen, CalendarCheck, ClipboardList, CreditCard, FileText, Gauge, GraduationCap, KeyRound, LogOut, Megaphone, MessageCircle, Newspaper, PanelLeftClose, PanelLeftOpen, Target, Trash2, Trophy, UsersRound, X, Menu } from "lucide-react";
+import { Bell, Bot, BookOpen, CalendarCheck, ClipboardList, CreditCard, FileText, Gauge, GraduationCap, KeyRound, LoaderCircle, LogOut, Megaphone, MessageCircle, Newspaper, PanelLeftClose, PanelLeftOpen, Search, Target, Trash2, Trophy, UsersRound, X, Menu } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { api } from "../api/client.js";
@@ -105,6 +105,7 @@ export function AppShell() {
             <p>{user.role.replace("_", " ").toUpperCase()}</p>
             <h1>{profile?.name || user.name}</h1>
           </div>
+          <GlobalSearch />
           <div className="topbar-actions">
             <ThemeToggle />
             <NotificationCenter user={user} />
@@ -118,6 +119,120 @@ export function AppShell() {
           <Outlet />
         </div>
       </main>
+    </div>
+  );
+}
+
+const globalSearchIcons = {
+  student: UsersRound,
+  note: BookOpen,
+  notice: Megaphone,
+  question: ClipboardList,
+};
+
+function GlobalSearch() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const rootRef = useRef(null);
+  const inputRef = useRef(null);
+  const [query, setQuery] = useState("");
+  const [results, setResults] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    const needle = query.trim();
+    if (needle.length < 2) {
+      setResults([]);
+      setLoading(false);
+      return undefined;
+    }
+    let cancelled = false;
+    setLoading(true);
+    const timer = window.setTimeout(async () => {
+      try {
+        const data = await api(`/global-search/?q=${encodeURIComponent(needle)}`);
+        if (!cancelled) setResults(data.results || []);
+      } catch {
+        if (!cancelled) setResults([]);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    }, 260);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timer);
+    };
+  }, [query]);
+
+  useEffect(() => {
+    function handleKeyboard(event) {
+      const activeTag = document.activeElement?.tagName?.toLowerCase();
+      if (event.key === "/" && !["input", "textarea", "select"].includes(activeTag)) {
+        event.preventDefault();
+        inputRef.current?.focus();
+        setOpen(true);
+      }
+      if (event.key === "Escape") setOpen(false);
+    }
+    function handleOutside(event) {
+      if (rootRef.current && !rootRef.current.contains(event.target)) setOpen(false);
+    }
+    document.addEventListener("keydown", handleKeyboard);
+    document.addEventListener("pointerdown", handleOutside);
+    return () => {
+      document.removeEventListener("keydown", handleKeyboard);
+      document.removeEventListener("pointerdown", handleOutside);
+    };
+  }, []);
+
+  useEffect(() => {
+    setOpen(false);
+  }, [location.pathname]);
+
+  function chooseResult(result) {
+    setOpen(false);
+    setQuery("");
+    if (result.path) navigate(result.path);
+  }
+
+  return (
+    <div className="global-search" ref={rootRef}>
+      <label className="global-search-field">
+        {loading ? <LoaderCircle className="global-search-spinner" size={18} /> : <Search size={18} />}
+        <input
+          aria-label="Search students, notes, notices and questions"
+          autoComplete="off"
+          onChange={(event) => {
+            setQuery(event.target.value);
+            setOpen(true);
+          }}
+          onFocus={() => setOpen(true)}
+          placeholder="Search students, notes, notices..."
+          ref={inputRef}
+          value={query}
+        />
+        <kbd>/</kbd>
+      </label>
+      {open && (
+        <section className="global-search-panel" aria-label="Search results">
+          {query.trim().length < 2 && <div className="global-search-hint">Type at least 2 letters to search.</div>}
+          {query.trim().length >= 2 && !loading && results.length === 0 && <div className="global-search-hint">No matching result found.</div>}
+          {results.map((result) => {
+            const Icon = globalSearchIcons[result.type] || Search;
+            return (
+              <button key={`${result.type}-${result.id}`} onClick={() => chooseResult(result)} type="button">
+                <span className={`global-result-icon ${result.type}`}><Icon size={17} /></span>
+                <span>
+                  <strong>{result.title}</strong>
+                  <small>{result.subtitle}</small>
+                </span>
+                <em>{result.type}</em>
+              </button>
+            );
+          })}
+        </section>
+      )}
     </div>
   );
 }

@@ -215,6 +215,66 @@ main { padding: clamp(18px, 3vw, 32px); overflow: auto; min-width: 0; animation:
 .topbar-actions { display: flex; align-items: center; gap: 10px; margin-left: auto; }
 .identity { display: flex; align-items: center; gap: 10px; background: rgba(255,255,255,0.72); backdrop-filter: blur(14px); padding: 12px 16px; border-radius: 18px; border: 1px solid rgba(231,233,239,0.9); font-weight: 800; box-shadow: 0 12px 34px rgba(15,23,42,0.06); }
 .menu-button { display: none; }
+.global-search { position: relative; width: min(460px, 38vw); margin-left: auto; z-index: 42; }
+.global-search-field {
+  min-height: 48px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  padding: 0 12px;
+  color: var(--muted);
+  background: var(--surface-glass-strong);
+  border: 1px solid var(--theme-border);
+  border-radius: 16px;
+  box-shadow: 0 12px 34px rgba(15,23,42,.07);
+  backdrop-filter: blur(18px);
+}
+.global-search-field:focus-within { color: var(--red); border-color: rgba(214,31,58,.38); box-shadow: 0 0 0 4px rgba(214,31,58,.09), 0 16px 40px rgba(15,23,42,.10); }
+.global-search-field input { width: 100%; min-width: 0; padding: 0; border: 0; outline: 0; color: var(--ink); background: transparent; box-shadow: none; }
+.global-search-field input:focus { box-shadow: none; }
+.global-search-field kbd { min-width: 24px; height: 24px; display: grid; place-items: center; color: var(--muted); background: var(--surface-muted); border: 1px solid var(--theme-border); border-radius: 7px; font-size: 12px; font-weight: 900; }
+.global-search-spinner { animation: spin .8s linear infinite; }
+.global-search-panel {
+  position: absolute;
+  inset: calc(100% + 10px) 0 auto 0;
+  max-height: min(520px, calc(100vh - 130px));
+  padding: 9px;
+  overflow: auto;
+  color: var(--ink);
+  background: var(--surface-glass-strong);
+  border: 1px solid var(--theme-border);
+  border-radius: 18px;
+  box-shadow: 0 28px 80px rgba(15,23,42,.20);
+  backdrop-filter: blur(22px);
+  animation: dropdown-panel 180ms ease both;
+}
+.global-search-panel button {
+  width: 100%;
+  min-height: 66px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 11px;
+  padding: 10px;
+  text-align: left;
+  color: var(--ink);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 14px;
+  cursor: pointer;
+}
+.global-search-panel button:hover { background: var(--surface-soft); border-color: var(--theme-border); transform: translateY(-1px); }
+.global-search-panel button > span:nth-child(2) { min-width: 0; }
+.global-search-panel strong, .global-search-panel small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.global-search-panel strong { font-size: 14px; }
+.global-search-panel small { margin-top: 4px; color: var(--muted); font-size: 12px; }
+.global-search-panel em { color: var(--muted); font-size: 10px; font-style: normal; font-weight: 900; text-transform: uppercase; }
+.global-result-icon { width: 38px; height: 38px; display: grid; place-items: center; color: var(--blue); background: color-mix(in srgb, var(--blue), transparent 88%); border-radius: 12px; }
+.global-result-icon.note { color: var(--green); background: color-mix(in srgb, var(--green), transparent 88%); }
+.global-result-icon.notice { color: #d97706; background: rgba(245,158,11,.12); }
+.global-result-icon.question { color: var(--red); background: color-mix(in srgb, var(--red), transparent 88%); }
+.global-search-hint { padding: 24px 14px; text-align: center; color: var(--muted); font-size: 13px; font-weight: 750; }
 
 .page-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; animation: page-enter 300ms ease; }
 .two-column { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; align-items: start; animation: page-enter 300ms ease; }
@@ -1085,6 +1145,8 @@ textarea { transition: color 220ms ease, background-color 220ms ease, background
 @keyframes badge-pop { 0% { transform: scale(.82); } 55% { transform: scale(1.16); } 100% { transform: scale(1); } }
 
 @media (max-width: 1100px) {
+  .topbar { flex-wrap: wrap; }
+  .global-search { order: 3; width: 100%; max-width: none; margin-left: 0; }
   .page-grid, .two-column { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .wide, .welcome-band { grid-column: span 2; }
   .student-top, .student-section { grid-template-columns: repeat(2, minmax(0, 1fr)); }

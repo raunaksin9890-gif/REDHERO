@@ -1,4 +1,4 @@
-import { ArrowRight, BarChart3, Bookmark, BookOpen, CalendarCheck, ChartNoAxesCombined, Clapperboard, Clock3, Download, Eye, FileText, GraduationCap, Layers3, Megaphone, Newspaper, Play, Send, Sparkles, Target, Trophy, UsersRound, X } from "lucide-react";
+import { ArrowRight, BarChart3, Bookmark, BookOpen, CalendarCheck, ChartNoAxesCombined, Clapperboard, Clock3, Download, Eye, FileText, Flame, GraduationCap, Layers3, Medal, Megaphone, Newspaper, Play, Printer, Send, Sparkles, Target, Trophy, UsersRound, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { API_URL, api } from "../api/client.js";
@@ -48,6 +48,7 @@ export function Dashboard() {
     return withLoader(
       <div className="premium-dashboard admin-dashboard page-grid">
         <style>{dashboardPremiumStyles}</style>
+        <AnnouncementBanner notices={data.recent_notices} />
         <NoticeList notices={data.recent_notices} />
         <Stat index={0} icon={GraduationCap} label="Students" value={data.total_students} trend="Live roster" />
         <Stat index={1} icon={UsersRound} label="Teachers" value={data.total_teachers} trend="Active faculty" />
@@ -65,6 +66,7 @@ export function Dashboard() {
     return withLoader(
       <div className="premium-dashboard teacher-dashboard page-grid">
         <style>{dashboardPremiumStyles}</style>
+        <AnnouncementBanner notices={data.recent_notices} />
         <NoticeList notices={data.recent_notices} />
         <Stat index={0} icon={UsersRound} label="Assigned Students" value={data.students} trend="Your classes" />
         <Stat index={1} icon={BookOpen} label="Assigned Classes" value={data.assigned_classes?.join(", ") || "-"} trend="Current access" />
@@ -75,10 +77,17 @@ export function Dashboard() {
   return withLoader(
     <div className="student-dashboard premium-dashboard student-premium">
       <style>{dashboardPremiumStyles}</style>
+      <AnnouncementBanner notices={data.latest_notices} />
       <section className="student-top-row">
         <WelcomeCard profile={data.profile} attendance={data.attendance_percentage} assignments={studentExtra.assignments} notes={studentExtra.notes} />
         <QuickActions />
       </section>
+      <StudentMotivation
+        classLevel={data.leaderboard_class}
+        leaderboard={data.leaderboard}
+        rank={data.leaderboard_rank}
+        streak={data.study_streak}
+      />
       <div className="student-lower-dashboard">
         <DashboardSection title="Academic Overview" subtitle="Your academic performance at a glance.">
           <PremiumStats data={data} extras={studentExtra} />
@@ -251,14 +260,21 @@ function resolveAssetUrl(value = "") {
 }
 
 function downloadName(item) {
+  if (item.file_name) return item.file_name;
   const title = (item.title || "redhero-note").replace(/[^a-z0-9_-]+/gi, "-").replace(/^-+|-+$/g, "").toLowerCase();
-  return `${title || "redhero-note"}.pdf`;
+  let extension = ".pdf";
+  try {
+    extension = new URL(item.pdf_url, window.location.origin).pathname.match(/\.[a-z0-9]{1,8}$/i)?.[0] || extension;
+  } catch {
+    // Keep PDF as the backward-compatible fallback name.
+  }
+  return `${title || "redhero-note"}${extension}`;
 }
 
 function triggerNoteDownload(item, toast) {
   const url = resolveAssetUrl(item.pdf_url);
   if (!url) {
-    toast?.show("No PDF is attached to this note.", "error");
+    toast?.show("No file is attached to this note.", "error");
     return;
   }
   const link = document.createElement("a");
@@ -269,6 +285,39 @@ function triggerNoteDownload(item, toast) {
   document.body.appendChild(link);
   link.click();
   link.remove();
+}
+
+function triggerNotePrint(item, toast) {
+  const url = resolveAssetUrl(item.pdf_url);
+  if (!url) {
+    toast?.show("No PDF is attached to this note.", "error");
+    return;
+  }
+  const printWindow = window.open(url, "_blank");
+  if (!printWindow) {
+    toast?.show("Allow pop-ups to print this PDF.", "error");
+    return;
+  }
+  printWindow.opener = null;
+  window.setTimeout(() => {
+    try {
+      printWindow.focus();
+      printWindow.print();
+    } catch {
+      toast?.show("PDF opened—use Ctrl+P to print.", "info");
+    }
+  }, 900);
+}
+
+function canPrintNote(item) {
+  if (!item.file_type) return true;
+  return item.file_type === "application/pdf" || item.file_type.startsWith("image/");
+}
+
+function noteTypeLabel(item) {
+  if (item.file_type === "application/pdf" || String(item.pdf_url || "").toLowerCase().includes(".pdf")) return "PDF";
+  const extension = String(item.file_name || "").split(".").pop();
+  return extension && extension !== item.file_name ? extension.slice(0, 4).toUpperCase() : "FILE";
 }
 
 function WelcomeCard({ profile, attendance, assignments = [], notes = [] }) {
@@ -287,6 +336,79 @@ function WelcomeCard({ profile, attendance, assignments = [], notes = [] }) {
         <span><BookOpen size={16} /> {notes.length} Notes</span>
       </div>
       <div className="welcome-glow" />
+    </section>
+  );
+}
+
+function AnnouncementBanner({ notices = [] }) {
+  const [active, setActive] = useState(0);
+  const [paused, setPaused] = useState(false);
+  const urgentWords = ["urgent", "important", "deadline", "exam", "cancelled", "emergency"];
+  const ordered = [...notices].sort((first, second) => {
+    const firstUrgent = urgentWords.some((word) => `${first.title} ${first.body}`.toLowerCase().includes(word));
+    const secondUrgent = urgentWords.some((word) => `${second.title} ${second.body}`.toLowerCase().includes(word));
+    return Number(secondUrgent) - Number(firstUrgent);
+  });
+
+  useEffect(() => {
+    if (paused || ordered.length < 2) return undefined;
+    const timer = window.setInterval(() => setActive((index) => (index + 1) % ordered.length), 5000);
+    return () => window.clearInterval(timer);
+  }, [ordered.length, paused]);
+
+  useEffect(() => {
+    if (active >= ordered.length) setActive(0);
+  }, [active, ordered.length]);
+
+  const notice = ordered[active];
+  const urgent = notice && urgentWords.some((word) => `${notice.title} ${notice.body}`.toLowerCase().includes(word));
+  return (
+    <section className={`announcement-banner ${urgent ? "urgent" : ""}`} onMouseEnter={() => setPaused(true)} onMouseLeave={() => setPaused(false)}>
+      <span className="announcement-label"><Megaphone size={16} /> {urgent ? "URGENT" : "ANNOUNCEMENT"}</span>
+      {notice ? (
+        <div className="announcement-copy" aria-live="polite" key={notice.id}>
+          <strong>{notice.title}</strong>
+          <span>{notice.body}</span>
+        </div>
+      ) : (
+        <div className="announcement-copy"><strong>No new announcements</strong><span>Latest notices will appear here.</span></div>
+      )}
+      {notice && <Link to={`/learning/notice-board/${notice.id}`}>View <ArrowRight size={15} /></Link>}
+    </section>
+  );
+}
+
+function StudentMotivation({ classLevel, leaderboard = [], rank, streak = {} }) {
+  return (
+    <section className="student-motivation-grid">
+      <article className="streak-card">
+        <div className="streak-icon"><Flame size={30} /></div>
+        <div>
+          <span>Study Streak</span>
+          <strong>{streak.current_streak || 0} days</strong>
+          <p>{streak.practiced_today ? "Today's practice completed—great work!" : "Complete today's practice to grow your streak."}</p>
+        </div>
+        <div className="streak-stats">
+          <span><strong>{streak.longest_streak || 0}</strong> Best</span>
+          <span><strong>{streak.total_practice_days || 0}</strong> Active days</span>
+        </div>
+      </article>
+      <article className="leaderboard-card">
+        <header>
+          <div><Trophy size={20} /><span>Class {classLevel || "-"} Leaderboard</span></div>
+          <strong>{rank ? `Your rank #${rank}` : "Start practicing"}</strong>
+        </header>
+        <div className="leaderboard-list">
+          {leaderboard.slice(0, 5).map((student) => (
+            <div className={student.is_current ? "current" : ""} key={student.student_id}>
+              <span className={`rank rank-${student.rank}`}><Medal size={15} /> {student.rank}</span>
+              <span><strong>{student.name}</strong><small>Roll {student.roll_number || "-"} · {student.practice_sessions} practice</small></span>
+              <strong>{Math.round(student.score || 0)}%</strong>
+            </div>
+          ))}
+          {!leaderboard.length && <p className="leaderboard-empty">Practice and marks data will create the leaderboard.</p>}
+        </div>
+      </article>
     </section>
   );
 }
@@ -465,10 +587,10 @@ function InteractiveNotesCard({ items = [] }) {
           const isBookmarked = Boolean(bookmarked[item.id]);
           return (
             <article className="note-resource" key={item.id}>
-              <div className="pdf-thumb"><FileText size={28} /><span>PDF</span></div>
+              <div className="pdf-thumb"><FileText size={28} /><span>{noteTypeLabel(item)}</span></div>
               <div>
                 <strong>{item.title}</strong>
-                <span>{item.subject} Â· {item.chapter}</span>
+                <span>{item.subject} · {item.chapter}</span>
               </div>
               <div className="card-button-row">
                 <button className="mini-button" type="button" disabled={Boolean(pending[item.id])} onClick={() => toggleBookmark(item)}>
@@ -482,13 +604,14 @@ function InteractiveNotesCard({ items = [] }) {
                   onClick={(event) => {
                     if (!pdfUrl) {
                       event.preventDefault();
-                      toast?.show("No PDF is attached to this note.", "error");
+                      toast?.show("No file is attached to this note.", "error");
                     }
                   }}
                 >
                   <Eye size={15} /> View
                 </a>
                 <button className="mini-button red" type="button" onClick={() => triggerNoteDownload(item, toast)}><Download size={15} /> Download</button>
+                {canPrintNote(item) && <button className="mini-button" type="button" onClick={() => triggerNotePrint(item, toast)}><Printer size={15} /> Print</button>}
               </div>
             </article>
           );
@@ -504,18 +627,21 @@ function VideosCard({ items = [] }) {
       <CardHeader icon={Clapperboard} title="Lecture Videos" action={<Link className="mini-button" to="/learning">Watch all</Link>} />
       <div className="media-grid">
         {items.length === 0 && <CardEmpty icon={Clapperboard} title="No videos yet" message="New video lessons will appear here." action={<Link className="mini-button" to="/learning">Browse lessons</Link>} />}
-        {items.map((item) => (
+        {items.map((item) => {
+          const videoUrl = resolveAssetUrl(item.youtube_url);
+          return (
           <article className="video-resource" key={item.id}>
             <div className="video-thumb" style={youtubeThumb(item.youtube_url) ? { backgroundImage: `url(${youtubeThumb(item.youtube_url)})` } : undefined}>
-              <a href={item.youtube_url} target="_blank" rel="noreferrer" aria-label={`Play ${item.title}`}><Play size={18} /></a>
+              <a href={videoUrl} target="_blank" rel="noreferrer" aria-label={`Play ${item.title}`}><Play size={18} /></a>
               <span>Video</span>
-              <small>12:45</small>
+              <small>{item.file_name ? "Uploaded" : "Online"}</small>
             </div>
             <strong>{item.title}</strong>
             <span>{item.subject} · {item.chapter}</span>
-            <a className="mini-button red watch-button" href={item.youtube_url} target="_blank" rel="noreferrer"><Play size={15} /> Watch</a>
+            <a className="mini-button red watch-button" href={videoUrl} target="_blank" rel="noreferrer"><Play size={15} /> Watch</a>
           </article>
-        ))}
+          );
+        })}
       </div>
     </section>
   );
@@ -1552,6 +1678,54 @@ const dashboardPremiumStyles = `
   background: linear-gradient(135deg, #e11d48, #7f1020);
   box-shadow: 0 20px 46px rgba(225,29,72,.30), 0 0 28px rgba(244,63,94,.18);
 }
+.announcement-banner {
+  grid-column: 1 / -1;
+  min-height: 58px;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 14px;
+  color: #f8fafc;
+  background: linear-gradient(90deg, rgba(30,41,59,.98), rgba(15,23,42,.96));
+  border: 1px solid rgba(148,163,184,.24);
+  border-radius: 10px;
+  box-shadow: 0 14px 34px rgba(2,6,23,.18);
+  overflow: hidden;
+}
+.announcement-banner.urgent { background: linear-gradient(90deg, rgba(136,19,55,.98), rgba(69,10,28,.96)); border-color: rgba(251,113,133,.34); }
+.announcement-label { display: inline-flex; align-items: center; gap: 7px; min-height: 30px; padding: 0 10px; border-radius: 999px; color: #fecdd3; background: rgba(225,29,72,.16); font-size: 11px; font-weight: 950; letter-spacing: .06em; }
+.announcement-copy { min-width: 0; display: flex; align-items: center; gap: 9px; overflow: hidden; }
+.announcement-copy { animation: announcementIn 320ms ease both; }
+.announcement-copy strong { flex: 0 0 auto; color: #fff; }
+.announcement-copy span { min-width: 0; color: #cbd5e1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.announcement-banner > a { display: inline-flex; align-items: center; gap: 5px; color: #fff; white-space: nowrap; }
+.student-motivation-grid { display: grid; grid-template-columns: minmax(260px, .8fr) minmax(420px, 1.4fr); gap: 14px; margin-top: 14px; }
+.streak-card, .leaderboard-card { border: 1px solid rgba(148,163,184,.18); border-radius: 10px; background: linear-gradient(180deg, rgba(17,25,39,.96), rgba(10,16,28,.96)); box-shadow: 0 18px 46px rgba(0,0,0,.22); }
+.streak-card { min-height: 190px; display: grid; grid-template-columns: auto 1fr; align-items: center; gap: 14px; padding: 18px; }
+.streak-icon { width: 60px; height: 60px; display: grid; place-items: center; color: #fb7185; background: rgba(225,29,72,.14); border: 1px solid rgba(251,113,133,.22); border-radius: 18px; box-shadow: 0 0 28px rgba(225,29,72,.14); }
+.streak-card > div:nth-child(2) > span { color: #94a3b8; font-size: 12px; font-weight: 900; text-transform: uppercase; }
+.streak-card > div:nth-child(2) > strong { display: block; margin-top: 4px; color: #fff; font-size: 30px; }
+.streak-card p { margin: 7px 0 0; color: #aeb6c4; font-size: 12px; line-height: 1.5; }
+.streak-stats { grid-column: 1 / -1; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
+.streak-stats span { padding: 9px 10px; color: #94a3b8; background: rgba(255,255,255,.04); border: 1px solid rgba(148,163,184,.13); border-radius: 8px; font-size: 11px; }
+.streak-stats strong { display: block; color: #fff; font-size: 17px; }
+.leaderboard-card { padding: 16px; }
+.leaderboard-card > header { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 10px; }
+.leaderboard-card > header div { display: flex; align-items: center; gap: 8px; color: #fb7185; }
+.leaderboard-card > header div span { color: #fff; font-weight: 900; }
+.leaderboard-card > header > strong { color: #fecdd3; font-size: 12px; }
+.leaderboard-list { display: grid; gap: 6px; }
+.leaderboard-list > div { display: grid; grid-template-columns: 58px minmax(0, 1fr) auto; align-items: center; gap: 10px; min-height: 48px; padding: 7px 10px; border: 1px solid rgba(148,163,184,.12); border-radius: 8px; background: rgba(255,255,255,.035); }
+.leaderboard-list > div.current { border-color: rgba(251,113,133,.34); background: rgba(225,29,72,.11); }
+.leaderboard-list > div > span:nth-child(2) { min-width: 0; }
+.leaderboard-list > div > span:nth-child(2) strong, .leaderboard-list > div > span:nth-child(2) small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.leaderboard-list > div > span:nth-child(2) strong, .leaderboard-list > div > strong { color: #fff; }
+.leaderboard-list small { margin-top: 3px; color: #94a3b8; font-size: 11px; }
+.rank { display: inline-flex; align-items: center; gap: 5px; color: #94a3b8; font-size: 12px; font-weight: 950; }
+.rank-1 { color: #fbbf24; } .rank-2 { color: #cbd5e1; } .rank-3 { color: #fb923c; }
+.leaderboard-empty { margin: 0; padding: 28px 12px; text-align: center; color: #94a3b8; }
+@keyframes announcementIn { from { opacity: 0; transform: translateX(18px); } to { opacity: 1; transform: translateX(0); } }
 @media (max-width: 1280px) {
   .student-premium .premium-stat-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -1561,6 +1735,7 @@ const dashboardPremiumStyles = `
   }
 }
 @media (max-width: 980px) {
+  .student-motivation-grid { grid-template-columns: 1fr; }
   .student-premium .student-top-row,
   .student-premium .dashboard-analytics {
     grid-template-columns: 1fr;
@@ -1608,7 +1783,31 @@ const dashboardPremiumStyles = `
   .student-premium .summary-chip-row {
     display: grid;
   }
+  .announcement-banner { grid-template-columns: 1fr auto; }
+  .announcement-label { grid-column: 1 / -1; width: fit-content; }
+  .announcement-copy { display: grid; gap: 3px; }
+  .leaderboard-card > header { align-items: flex-start; flex-direction: column; }
 }
+
+html[data-theme="light"] .announcement-banner {
+  color: #172033;
+  background: linear-gradient(90deg, #ffffff, #f8fafc);
+  border-color: rgba(203,213,225,.86);
+  box-shadow: 0 14px 34px rgba(15,23,42,.08);
+}
+html[data-theme="light"] .announcement-banner.urgent { background: linear-gradient(90deg, #fff1f2, #ffffff); border-color: rgba(225,29,72,.28); }
+html[data-theme="light"] .announcement-copy strong, html[data-theme="light"] .announcement-banner > a { color: #172033; }
+html[data-theme="light"] .announcement-copy span { color: #64748b; }
+html[data-theme="light"] .streak-card, html[data-theme="light"] .leaderboard-card { color: #172033; background: linear-gradient(180deg, #ffffff, #f8fafc); border-color: rgba(203,213,225,.82); box-shadow: 0 18px 46px rgba(15,23,42,.08); }
+html[data-theme="light"] .streak-card > div:nth-child(2) > strong,
+html[data-theme="light"] .streak-stats strong,
+html[data-theme="light"] .leaderboard-card > header div span,
+html[data-theme="light"] .leaderboard-list > div > span:nth-child(2) strong,
+html[data-theme="light"] .leaderboard-list > div > strong { color: #172033; }
+html[data-theme="light"] .streak-card p, html[data-theme="light"] .streak-stats span, html[data-theme="light"] .leaderboard-list small { color: #64748b; }
+html[data-theme="light"] .streak-stats span, html[data-theme="light"] .leaderboard-list > div { background: #ffffff; border-color: rgba(203,213,225,.72); }
+html[data-theme="light"] .leaderboard-list > div.current { background: #fff1f2; border-color: rgba(225,29,72,.30); }
+
 html[data-theme="light"] .premium-dashboard {
   color: #172033;
   background:

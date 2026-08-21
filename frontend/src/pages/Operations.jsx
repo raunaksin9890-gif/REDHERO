@@ -204,6 +204,7 @@ function AttendanceDetail({ data, user, onSaved, setMessage }) {
   const summary = attendanceSummary(data.attendance);
   return (
     <div className="ops-detail-grid">
+      {user.role !== "student" && <AttendanceQuickMark attendance={data.attendance} students={data.students} onSaved={onSaved} setMessage={setMessage} />}
       {user.role !== "student" && <AttendanceForm students={data.students} onSaved={onSaved} setMessage={setMessage} />}
       <MetricDeck metrics={[["Overall Attendance", formatPercent(summary.percent)], ["Present", summary.present], ["Absent", summary.absent], ["Leave", "Not tracked"]]} />
       <Panel title="Attendance Trend" icon={Activity} className="span-2">
@@ -1024,6 +1025,90 @@ function MetricDeck({ metrics }) {
   );
 }
 
+function AttendanceQuickMark({ attendance = [], students = [], onSaved, setMessage }) {
+  const classes = useMemo(() => [...new Set(students.map((student) => student.class_level).filter(Boolean))].sort((a, b) => Number(a) - Number(b)), [students]);
+  const [classLevel, setClassLevel] = useState(classes[0] || "");
+  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [absentIds, setAbsentIds] = useState([]);
+  const [saving, setSaving] = useState(false);
+  const toast = useToast();
+  const classStudents = useMemo(
+    () => students.filter((student) => student.class_level === classLevel).sort((first, second) => String(first.roll_number).localeCompare(String(second.roll_number), undefined, { numeric: true })),
+    [classLevel, students],
+  );
+
+  useEffect(() => {
+    if (!classLevel && classes.length) setClassLevel(classes[0]);
+  }, [classLevel, classes]);
+
+  useEffect(() => {
+    const absent = attendance
+      .filter((row) => row.class_level === classLevel && String(row.date || "").slice(0, 10) === date && row.status === "absent")
+      .map((row) => row.student?.id)
+      .filter(Boolean);
+    setAbsentIds(absent);
+  }, [attendance, classLevel, date]);
+
+  function toggleAbsent(studentId) {
+    setAbsentIds((current) => current.includes(studentId) ? current.filter((id) => id !== studentId) : [...current, studentId]);
+  }
+
+  async function saveClassAttendance() {
+    if (!classLevel || !classStudents.length) {
+      toast?.show("Select a class with students.", "error");
+      return;
+    }
+    try {
+      setSaving(true);
+      const response = await api("/attendance/bulk/", {
+        method: "POST",
+        body: JSON.stringify({ class_level: classLevel, date, absent_student_ids: absentIds }),
+      });
+      setMessage(response.message || "Class attendance saved");
+      toast?.show(`${response.present_count} present · ${response.absent_count} absent`);
+      onSaved();
+    } catch (err) {
+      setMessage(err.message);
+      toast?.show(err.message, "error");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <Panel title="Attendance Quick-Mark" icon={ClipboardCheck} className="span-3">
+      <div className="quick-attendance-toolbar">
+        <select value={classLevel} onChange={(event) => setClassLevel(event.target.value)}>
+          <option value="">Select class</option>
+          {classes.map((item) => <option key={item} value={item}>Class {item}</option>)}
+        </select>
+        <input type="date" value={date} onChange={(event) => setDate(event.target.value)} />
+        <button className="ops-soft-button" onClick={() => setAbsentIds([])} type="button"><CheckCircle2 size={16} /> All Present</button>
+        <span>{classStudents.length - absentIds.length} present · {absentIds.length} absent</span>
+      </div>
+      <div className="quick-attendance-list">
+        {classStudents.map((student) => {
+          const absent = absentIds.includes(student.id);
+          return (
+            <button className={absent ? "absent" : "present"} key={student.id} onClick={() => toggleAbsent(student.id)} type="button">
+              <span>{student.roll_number || "-"}</span>
+              <strong>{student.name}</strong>
+              <em>{absent ? "Absent" : "Present"}</em>
+            </button>
+          );
+        })}
+        {!classStudents.length && <EmptyState title="No students in this class" />}
+      </div>
+      <div className="quick-attendance-actions">
+        <small>All students are Present by default. Click only the absent students.</small>
+        <button className="ops-red-button" disabled={saving || !classStudents.length} onClick={saveClassAttendance} type="button">
+          <Save size={16} /> {saving ? "Saving..." : "Save Class Attendance"}
+        </button>
+      </div>
+    </Panel>
+  );
+}
+
 function AttendanceForm({ students, onSaved, setMessage }) {
   const [form, setForm] = useState({ student: "", date: new Date().toISOString().slice(0, 10), status: "present" });
   const toast = useToast();
@@ -1040,7 +1125,7 @@ function AttendanceForm({ students, onSaved, setMessage }) {
     }
   }
   return (
-    <Panel title="Mark Attendance" icon={Plus} className="span-3">
+    <Panel title="Individual Attendance Correction" icon={Plus} className="span-3">
       <form className="ops-form" onSubmit={submit}>
         <select value={form.student} onChange={(event) => setForm({ ...form, student: event.target.value })} required>
           <option value="">Select student</option>
@@ -1892,6 +1977,19 @@ const operationsCenterStyles = `
 .ops-tools input { border: 0; background: transparent; padding-left: 0; }
 .ops-form { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)) auto; gap: 10px; }
 .ops-form textarea { grid-column: span 2; min-height: 42px; resize: vertical; }
+.quick-attendance-toolbar { display: grid; grid-template-columns: minmax(150px, 220px) minmax(150px, 200px) auto 1fr; align-items: center; gap: 9px; margin-bottom: 12px; }
+.quick-attendance-toolbar select, .quick-attendance-toolbar input { min-height: 38px; padding: 8px 10px; color: #f8fafc; background: rgba(4,10,20,.72); border: 1px solid rgba(148,163,184,.18); border-radius: 6px; }
+.quick-attendance-toolbar > span { justify-self: end; color: #aeb6c4; font-size: 12px; font-weight: 900; }
+.quick-attendance-list { display: flex; flex-wrap: wrap; gap: 8px; min-height: 64px; padding: 12px; border: 1px solid rgba(148,163,184,.14); border-radius: 8px; background: rgba(4,10,20,.36); }
+.quick-attendance-list > button { min-width: 175px; flex: 1 1 190px; display: grid; grid-template-columns: 30px minmax(0, 1fr) auto; align-items: center; gap: 8px; min-height: 48px; padding: 7px 9px; color: #dbeafe; text-align: left; border: 1px solid rgba(34,197,94,.24); border-radius: 8px; background: rgba(34,197,94,.09); cursor: pointer; }
+.quick-attendance-list > button:hover { transform: translateY(-1px); }
+.quick-attendance-list > button.absent { color: #fecdd3; border-color: rgba(251,113,133,.32); background: rgba(214,31,58,.14); }
+.quick-attendance-list > button > span { width: 28px; height: 28px; display: grid; place-items: center; color: #bbf7d0; background: rgba(34,197,94,.13); border-radius: 7px; font-size: 11px; font-weight: 950; }
+.quick-attendance-list > button.absent > span { color: #fecdd3; background: rgba(214,31,58,.16); }
+.quick-attendance-list > button strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: inherit; font-size: 12px; }
+.quick-attendance-list > button em { color: inherit; font-size: 10px; font-style: normal; font-weight: 900; text-transform: uppercase; }
+.quick-attendance-actions { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-top: 12px; }
+.quick-attendance-actions small { color: #8ea0b8; }
 .exam-form-labelled label { display: grid; gap: 6px; color: #8ea0b8; font-size: 12px; font-weight: 850; }
 .exam-form-labelled label.span-field { grid-column: span 2; }
 .exam-form-labelled label input,
@@ -2045,6 +2143,10 @@ const operationsCenterStyles = `
   .assignment-filters select { grid-column: 1 / -1; }
   .exam-options, .exam-taking-panel > header { grid-template-columns: 1fr; display: grid; }
   .ops-form textarea { grid-column: auto; }
+  .quick-attendance-toolbar { grid-template-columns: 1fr; }
+  .quick-attendance-toolbar > span { justify-self: start; }
+  .quick-attendance-actions { align-items: stretch; flex-direction: column; }
+  .quick-attendance-list > button { flex-basis: 100%; }
   .ops-metric-row { grid-template-columns: 1fr; }
   .ops-table-wrap table { min-width: max-content; }
 }
@@ -2142,6 +2244,8 @@ html[data-theme="light"] .operations-center .ops-actions select,
 html[data-theme="light"] .operations-center .ops-form input,
 html[data-theme="light"] .operations-center .ops-form select,
 html[data-theme="light"] .operations-center .ops-form textarea,
+html[data-theme="light"] .operations-center .quick-attendance-toolbar input,
+html[data-theme="light"] .operations-center .quick-attendance-toolbar select,
 html[data-theme="light"] .operations-center .ops-inline-edit input,
 html[data-theme="light"] .operations-center .ops-inline-edit textarea,
 html[data-theme="light"] .operations-center .ops-submit-form input,
@@ -2152,6 +2256,11 @@ html[data-theme="light"] .operations-center .exam-evaluation textarea {
   border-color: rgba(203,213,225,.9);
 }
 html[data-theme="light"] .operations-center .ops-soft-button { color: #334155; background: #ffffff; border-color: rgba(203,213,225,.9); }
+html[data-theme="light"] .operations-center .quick-attendance-toolbar > span,
+html[data-theme="light"] .operations-center .quick-attendance-actions small { color: #64748b; }
+html[data-theme="light"] .operations-center .quick-attendance-list { background: #f8fafc; border-color: rgba(203,213,225,.76); }
+html[data-theme="light"] .operations-center .quick-attendance-list > button.present { color: #166534; background: #f0fdf4; border-color: rgba(34,197,94,.28); }
+html[data-theme="light"] .operations-center .quick-attendance-list > button.absent { color: #9f1239; background: #fff1f2; border-color: rgba(225,29,72,.28); }
 html[data-theme="light"] .operations-center .ops-tabs button.active,
 html[data-theme="light"] .operations-center .exam-options button.active { color: #ffffff; background: linear-gradient(135deg, #d61f3a, #8f1026); }
 html[data-theme="light"] .operations-center .exam-options button { color: #334155; background: #ffffff; border-color: rgba(203,213,225,.9); }
