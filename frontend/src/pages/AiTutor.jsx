@@ -416,4 +416,20 @@ const aiTutorPremiumStyles = `
     min-height: 360px;
   }
 }
+@media (prefers-reduced-motion: reduce) {
+  .ai-tutor-page *,
+  .ai-tutor-page *::before,
+  .ai-tutor-page *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+  }
+  .ai-orb,
+  .ai-kinetic span,
+  .typing-bubble span {
+    animation: none !important;
+    opacity: 1;
+    transform: none;
+  }
+}
 `;

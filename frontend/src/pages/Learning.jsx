@@ -1019,4 +1019,13 @@ const learningHubStyles = `
   .mini-thumb { height: 58px; }
   .editing-item { grid-template-columns: 1fr; }
 }
+@media (prefers-reduced-motion: reduce) {
+  .learning-hub *,
+  .learning-hub *::before,
+  .learning-hub *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+  }
+}
 `;

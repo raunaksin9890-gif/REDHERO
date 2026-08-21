@@ -19,12 +19,19 @@
   background: var(--soft);
 }
 
+@property --value {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 0;
+}
+
 * { box-sizing: border-box; }
 html { scroll-behavior: smooth; }
 body { margin: 0; min-width: 0; overflow-x: hidden; background: linear-gradient(180deg, #fafafa, #f6f7fb, #ffffff); }
 button, input, select, textarea { font: inherit; }
 a { color: var(--red); text-decoration: none; font-weight: 750; }
 button, a, input, select, textarea { transition: border-color 180ms ease, box-shadow 180ms ease, transform 180ms ease, background 180ms ease; }
+button:active, a:active { transform: scale(.985); }
 button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible {
   outline: 3px solid rgba(215,25,32,0.22);
   outline-offset: 2px;
@@ -194,6 +201,7 @@ button:disabled { opacity: 0.55; cursor: not-allowed; transform: none; }
 .sidebar a.active::before { content: ""; position: absolute; left: -8px; top: 12px; bottom: 12px; width: 4px; border-radius: 999px; background: #ffffff; box-shadow: 0 0 18px rgba(255,255,255,0.9); }
 .sidebar-actions { margin-top: auto; display: grid; gap: 10px; }
 main { padding: clamp(18px, 3vw, 32px); overflow: auto; min-width: 0; animation: page-enter 300ms ease both; }
+.route-transition { animation: route-fade 260ms ease both; }
 .topbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; margin-bottom: 28px; position: sticky; top: 0; z-index: 35; padding: 10px 0; backdrop-filter: blur(18px); }
 .topbar p { margin: 0 0 4px; color: var(--red); font-weight: 900; font-size: 12px; }
 .topbar h1 { margin: 0; font-size: clamp(24px, 4vw, 32px); letter-spacing: 0; }
@@ -262,6 +270,11 @@ table { width: 100%; border-collapse: collapse; font-size: 14px; }
 th, td { padding: 12px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; vertical-align: middle; }
 th { background: rgba(248,250,252,0.92); color: var(--muted); text-transform: capitalize; font-size: 12px; letter-spacing: 0; position: sticky; top: 0; z-index: 1; }
 tr:hover td { background: #fffafa; }
+tbody tr { animation: table-row-in 260ms ease both; }
+tbody tr:nth-child(2) { animation-delay: 35ms; }
+tbody tr:nth-child(3) { animation-delay: 70ms; }
+tbody tr:nth-child(4) { animation-delay: 105ms; }
+tbody tr:nth-child(5) { animation-delay: 140ms; }
 .status-badge, .password-rules span {
   display: inline-flex;
   align-items: center;
@@ -767,7 +780,8 @@ tr:hover td { background: #fffafa; }
   position: relative;
 }
 .notification-bell:hover { transform: translateY(-2px); color: var(--red); box-shadow: 0 18px 42px rgba(15,23,42,0.10); }
-.notification-bell:has(> span) svg { animation: bell-pulse 2.2s ease-in-out infinite; }
+.notification-bell.notify-pulse svg { animation: bell-pop 480ms ease both; }
+.notification-bell.notify-pulse > span { animation: badge-pop 480ms ease both; }
 .notification-bell > span {
   position: absolute;
   top: -6px;
@@ -856,8 +870,10 @@ tr:hover td { background: #fffafa; }
 @keyframes logo-glow { 0%, 100% { opacity: .58; transform: scale(.96); } 50% { opacity: 1; transform: scale(1.05); } }
 @keyframes fade-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes page-enter { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes route-fade { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes card-rise { from { opacity: 0; transform: translate3d(0, 14px, 0) scale(.985); } to { opacity: 1; transform: translate3d(0, 0, 0) scale(1); } }
 @keyframes slide-up { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes table-row-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes toast-in { from { opacity: 0; transform: translate3d(0, 18px, 0) scale(.98); } to { opacity: 1; transform: translate3d(0, 0, 0) scale(1); } }
 @keyframes toast-progress { from { transform: scaleX(1); } to { transform: scaleX(0); } }
 @keyframes shimmer { to { background-position-x: -220%; } }
@@ -869,7 +885,8 @@ tr:hover td { background: #fffafa; }
 @keyframes accordion-open { from { opacity: 0; transform: translateY(-4px); } to { opacity: 1; transform: translateY(0); } }
 @keyframes dropdown-soft { from { opacity: .82; } to { opacity: 1; } }
 @keyframes dropdown-panel { from { opacity: 0; transform: translateY(-8px) scale(.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
-@keyframes bell-pulse { 0%, 100% { transform: rotate(0deg) scale(1); } 35% { transform: rotate(-8deg) scale(1.06); } 70% { transform: rotate(7deg) scale(1.03); } }
+@keyframes bell-pop { 0%, 100% { transform: rotate(0deg) scale(1); } 35% { transform: rotate(-8deg) scale(1.06); } 70% { transform: rotate(7deg) scale(1.03); } }
+@keyframes badge-pop { 0% { transform: scale(.82); } 55% { transform: scale(1.16); } 100% { transform: scale(1); } }
 
 @media (max-width: 1100px) {
   .page-grid, .two-column { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -927,6 +944,7 @@ tr:hover td { background: #fffafa; }
 }
 
 @media (prefers-reduced-motion: reduce) {
+  html { scroll-behavior: auto; }
   *, *::before, *::after {
     animation-duration: 1ms !important;
     animation-iteration-count: 1 !important;
@@ -935,5 +953,8 @@ tr:hover td { background: #fffafa; }
   }
   .logo-loader-mark > span, .logo-loader-mark::after, .logo-loader-mark .redhero-logo {
     animation: none !important;
+  }
+  button:active, a:active {
+    transform: none;
   }
 }

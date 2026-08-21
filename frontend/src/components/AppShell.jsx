@@ -1,5 +1,5 @@
 import { Bell, Bot, BookOpen, CalendarCheck, ClipboardList, CreditCard, FileText, Gauge, GraduationCap, KeyRound, LogOut, Megaphone, MessageCircle, Newspaper, PanelLeftClose, PanelLeftOpen, Target, Trash2, Trophy, UsersRound, X, Menu } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { api } from "../api/client.js";
 import { useAuth } from "./AuthProvider.jsx";
@@ -73,6 +73,12 @@ export function AppShell() {
           })}
         </nav>
         <div className="sidebar-actions">
+          {user.role === "super_admin" && (
+            <button className="logout" onClick={() => { closeNavigation(); navigate("/contact-us"); }}>
+              <MessageCircle size={18} />
+              <span>Contact Messages</span>
+            </button>
+          )}
           {user.role === "student" && (
             <button className="logout" onClick={() => { closeNavigation(); navigate("/contact-us"); }}>
               <MessageCircle size={18} />
@@ -106,7 +112,9 @@ export function AppShell() {
             </div>
           </div>
         </header>
-        <Outlet />
+        <div className="route-transition" key={location.pathname}>
+          <Outlet />
+        </div>
       </main>
     </div>
   );
@@ -116,6 +124,8 @@ function NotificationCenter({ user }) {
   const navigate = useNavigate();
   const [items, setItems] = useState([]);
   const [open, setOpen] = useState(false);
+  const [pulse, setPulse] = useState(false);
+  const previousUnread = useRef(null);
   const unread = items.filter((item) => !item.read).length;
 
   const loadNotifications = useCallback(async () => {
@@ -143,6 +153,22 @@ function NotificationCenter({ user }) {
   useEffect(() => {
     if (open) loadNotifications();
   }, [loadNotifications, open]);
+
+  useEffect(() => {
+    if (previousUnread.current === null) {
+      previousUnread.current = unread;
+      return undefined;
+    }
+    if (unread > previousUnread.current) {
+      setPulse(false);
+      window.requestAnimationFrame(() => setPulse(true));
+      const timer = window.setTimeout(() => setPulse(false), 520);
+      previousUnread.current = unread;
+      return () => window.clearTimeout(timer);
+    }
+    previousUnread.current = unread;
+    return undefined;
+  }, [unread]);
 
   async function markAllRead() {
     const previous = items;
@@ -187,7 +213,7 @@ function NotificationCenter({ user }) {
 
   return (
     <div className="notification-center">
-      <button className="notification-bell" aria-label="Open notifications" aria-expanded={open} onClick={() => setOpen((value) => !value)} data-tooltip="Notifications">
+      <button className={`notification-bell ${pulse ? "notify-pulse" : ""}`} aria-label="Open notifications" aria-expanded={open} onClick={() => setOpen((value) => !value)} data-tooltip="Notifications">
         <Bell size={20} />
         {unread > 0 && <span>{unread}</span>}
       </button>

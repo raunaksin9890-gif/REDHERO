@@ -6,7 +6,9 @@ import {
   CalendarDays,
   CheckCircle2,
   ClipboardCheck,
+  Copy,
   Clock3,
+  Download,
   FileCheck2,
   FileQuestion,
   IndianRupee,
@@ -20,13 +22,14 @@ import {
   Trash2,
   Trophy,
   Unlock,
+  Upload,
   WalletCards,
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../api/client.js";
 import { useAuth } from "../components/AuthProvider.jsx";
-import { ConfirmDialog, EmptyState, LoadingOverlay, useToast } from "../components/UX.jsx";
+import { AnimatedValue, ConfirmDialog, EmptyState, LoadingOverlay, useToast } from "../components/UX.jsx";
 
 const MODULES = [
   { key: "attendance", title: "Attendance", icon: ClipboardCheck },
@@ -41,7 +44,7 @@ const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"
 
 export function Operations() {
   const { user } = useAuth();
-  const [data, setData] = useState({ attendance: [], marks: [], assignments: [], exams: [], timetables: [], fees: [], students: [], audit: [] });
+  const [data, setData] = useState({ attendance: [], marks: [], assignments: [], exams: [], timetables: [], fees: [], feeSummary: {}, feeStudentRecords: [], paymentModes: [], students: [], audit: [] });
   const [active, setActive] = useState("hub");
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
@@ -68,6 +71,9 @@ export function Operations() {
         exams: exams.results || [],
         timetables: timetables.results || [],
         fees: fees.results || [],
+        feeSummary: fees.summary || {},
+        feeStudentRecords: fees.student_records || [],
+        paymentModes: fees.payment_modes || [],
         students: students.results || [],
         audit: audit.results || [],
       });
@@ -171,7 +177,7 @@ function ModuleCard({ summary, onOpen }) {
           <span>{summary.subtitle}</span>
         </div>
       </header>
-      <div className="ops-card-value">{summary.value}</div>
+      <div className="ops-card-value"><AnimatedValue value={summary.value} /></div>
       <div className="ops-metric-row">
         {summary.metrics.map((metric) => (
           <span key={metric.label}>
@@ -236,17 +242,32 @@ function MarksDetail({ data, user, onSaved, setMessage }) {
 
 function AssignmentsDetail({ data, user, onSaved, setMessage }) {
   const [tab, setTab] = useState("All");
+  const [search, setSearch] = useState("");
+  const [classFilter, setClassFilter] = useState("");
+  const [subjectFilter, setSubjectFilter] = useState("");
   const tabs = ["All", "Pending", "Submitted", "Completed"];
-  const rows = data.assignments.filter((item) => tab === "All" || assignmentStatus(item, user) === tab);
+  const rows = data.assignments.filter((item) => {
+    const status = assignmentStatus(item, user);
+    const haystack = `${item.title} ${item.subject} ${item.class_level}`.toLowerCase();
+    return (tab === "All" || status === tab || (tab === "Pending" && status === "Overdue")) && (!search || haystack.includes(search.toLowerCase())) && (!classFilter || item.class_level === classFilter) && (!subjectFilter || item.subject === subjectFilter);
+  });
   const completed = data.assignments.filter((item) => assignmentStatus(item, user) === "Completed").length;
   const submitted = data.assignments.filter((item) => assignmentStatus(item, user) === "Submitted").length;
-  const pending = data.assignments.filter((item) => assignmentStatus(item, user) === "Pending").length;
+  const pending = data.assignments.filter((item) => ["Pending", "Overdue"].includes(assignmentStatus(item, user))).length;
+  const classOptions = [...new Set(data.assignments.map((item) => item.class_level).filter(Boolean))].sort();
+  const subjectOptions = [...new Set(data.assignments.map((item) => item.subject).filter(Boolean))].sort();
 
   return (
     <div className="ops-detail-grid">
       {user.role !== "student" && <AssignmentForm onSaved={onSaved} setMessage={setMessage} />}
       <MetricDeck metrics={[["Total Assignments", data.assignments.length], ["Submitted", submitted], ["Pending", pending], ["Completed", completed]]} />
       <Panel title="Assignments" icon={ListChecks} className="span-3" action={<Segmented tabs={tabs} value={tab} onChange={setTab} />}>
+        <div className="ops-tools assignment-filters">
+          <Search size={16} />
+          <input placeholder="Search assignments" value={search} onChange={(event) => setSearch(event.target.value)} />
+          <select value={classFilter} onChange={(event) => setClassFilter(event.target.value)}><option value="">All classes</option>{classOptions.map((value) => <option key={value} value={value}>Class {value}</option>)}</select>
+          <select value={subjectFilter} onChange={(event) => setSubjectFilter(event.target.value)}><option value="">All subjects</option>{subjectOptions.map((value) => <option key={value}>{value}</option>)}</select>
+        </div>
         <div className="ops-assignment-list">
           {rows.map((item) => <AssignmentRow key={item.id} item={item} user={user} onSaved={onSaved} setMessage={setMessage} />)}
           {rows.length === 0 && <EmptyState title="No assignments in this view" />}
@@ -254,7 +275,7 @@ function AssignmentsDetail({ data, user, onSaved, setMessage }) {
       </Panel>
       {user.role !== "student" && (
         <Panel title="Recent Submissions" icon={FileCheck2} className="span-3">
-          <CompactTable columns={["Student", "Assignment", "Submitted On", "File"]} rows={assignmentSubmissions(data.assignments).slice(0, 8).map((row) => [row.student?.name || "-", row.assignmentTitle, formatDate(row.submitted_at), row.file_url || "-"])} />
+          <CompactTable columns={["Student", "Assignment", "Submitted On", "File", "Status"]} rows={assignmentSubmissions(data.assignments).slice(0, 8).map((row) => [row.student?.name || "-", row.assignmentTitle, formatDateTime(row.submitted_at), row.file_url ? <a href={row.file_url} target="_blank" rel="noreferrer">Open file</a> : "-", assignmentSubmissionStatus(row)])} />
         </Panel>
       )}
     </div>
@@ -298,22 +319,50 @@ function ExamsDetail({ data, user, onSaved, setMessage }) {
 
 function ExamForm({ students = [], onSaved, setMessage }) {
   const classOptions = [...new Set(students.map((student) => student.class_level).filter(Boolean))].sort();
+  const initialStart = "";
+  const initialEnd = "";
   const [form, setForm] = useState({
     name: "",
     class_level: "",
     subject: "",
     instructions: "",
     exam_date: new Date().toISOString().slice(0, 10),
-    start_time: "",
-    end_time: "",
+    start_time: initialStart,
+    end_time: initialEnd,
     duration_minutes: "60",
     total_marks: "0",
     passing_marks: "0",
     is_published: false,
   });
   const toast = useToast();
+  function patchForm(patch) {
+    const next = { ...form, ...patch };
+    if (patch.start_time || patch.end_time) {
+      const minutes = minutesBetween(next.start_time, next.end_time);
+      if (minutes > 0) next.duration_minutes = String(minutes);
+      if (patch.start_time) next.exam_date = patch.start_time.slice(0, 10);
+    }
+    if (patch.duration_minutes && next.start_time && !patch.end_time) {
+      const computedEnd = addMinutesLocal(next.start_time, Number(next.duration_minutes));
+      if (computedEnd) next.end_time = computedEnd;
+    }
+    setForm(next);
+  }
+  function validateExamForm() {
+    const duration = Number(form.duration_minutes);
+    if (!form.start_time || !form.end_time) return "Start and end date/time are required.";
+    if (new Date(form.end_time) <= new Date(form.start_time)) return "End date/time must be after start date/time.";
+    if (!Number.isFinite(duration) || duration <= 0) return "Duration must be positive.";
+    return "";
+  }
   async function submit(event) {
     event.preventDefault();
+    const validation = validateExamForm();
+    if (validation) {
+      setMessage(validation);
+      toast?.show(validation, "error");
+      return;
+    }
     try {
       await api("/exams/", { method: "POST", body: JSON.stringify(form) });
       setMessage("Exam created");
@@ -327,29 +376,29 @@ function ExamForm({ students = [], onSaved, setMessage }) {
   }
   return (
     <Panel title="Create Exam" icon={Plus} className="span-3">
-      <form className="ops-form" onSubmit={submit}>
-        <input placeholder="Exam Name" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} required />
-        {classOptions.length > 0 ? (
-          <select value={form.class_level} onChange={(event) => setForm({ ...form, class_level: event.target.value })} required>
+      <form className="ops-form exam-form-labelled" onSubmit={submit}>
+        <label>Exam Name<input value={form.name} onChange={(event) => patchForm({ name: event.target.value })} required /></label>
+        <label>Class{classOptions.length > 0 ? (
+          <select value={form.class_level} onChange={(event) => patchForm({ class_level: event.target.value })} required>
             <option value="">Select class</option>
             {classOptions.map((classLevel) => <option key={classLevel} value={classLevel}>Class {classLevel}</option>)}
           </select>
         ) : (
-          <input placeholder="Class" value={form.class_level} onChange={(event) => setForm({ ...form, class_level: event.target.value })} required />
-        )}
-        <input placeholder="Subject" value={form.subject} onChange={(event) => setForm({ ...form, subject: event.target.value })} required />
-        <input type="date" value={form.exam_date} onChange={(event) => setForm({ ...form, exam_date: event.target.value })} required />
-        <input type="datetime-local" value={form.start_time} onChange={(event) => setForm({ ...form, start_time: event.target.value })} required />
-        <input type="datetime-local" value={form.end_time} onChange={(event) => setForm({ ...form, end_time: event.target.value })} required />
-        <input inputMode="numeric" placeholder="Duration" value={form.duration_minutes} onChange={(event) => setForm({ ...form, duration_minutes: event.target.value })} required />
-        <input inputMode="decimal" placeholder="Total Marks" value={form.total_marks} onChange={(event) => setForm({ ...form, total_marks: event.target.value })} required />
-        <input inputMode="decimal" placeholder="Passing Marks" value={form.passing_marks} onChange={(event) => setForm({ ...form, passing_marks: event.target.value })} />
-        <select value={form.is_published ? "true" : "false"} onChange={(event) => setForm({ ...form, is_published: event.target.value === "true" })}>
+          <input value={form.class_level} onChange={(event) => patchForm({ class_level: event.target.value })} required />
+        )}</label>
+        <label>Subject<input value={form.subject} onChange={(event) => patchForm({ subject: event.target.value })} required /></label>
+        <label>Start Date & Time<input type="datetime-local" value={form.start_time} onChange={(event) => patchForm({ start_time: event.target.value })} required /></label>
+        <label>End Date & Time<input type="datetime-local" value={form.end_time} onChange={(event) => patchForm({ end_time: event.target.value })} required /></label>
+        <label>Duration (minutes)<input inputMode="numeric" value={form.duration_minutes} onChange={(event) => patchForm({ duration_minutes: event.target.value })} required /></label>
+        <label>Total Marks<input inputMode="decimal" value={form.total_marks} onChange={(event) => patchForm({ total_marks: event.target.value })} required /></label>
+        <label>Passing Marks<input inputMode="decimal" value={form.passing_marks} onChange={(event) => patchForm({ passing_marks: event.target.value })} /></label>
+        <label>Exam Status<select value={form.is_published ? "true" : "false"} onChange={(event) => patchForm({ is_published: event.target.value === "true" })}>
           <option value="false">Draft</option>
-          <option value="true">Published</option>
-        </select>
-        <textarea placeholder="Instructions" value={form.instructions} onChange={(event) => setForm({ ...form, instructions: event.target.value })} />
-        <button className="ops-red-button"><Plus size={16} /> Create</button>
+          <option value="true">Scheduled / Published</option>
+        </select></label>
+        <label>Negative Marking<input value="Not configured" readOnly /></label>
+        <label className="span-field">Instructions<textarea value={form.instructions} onChange={(event) => patchForm({ instructions: event.target.value })} /></label>
+        <button className="ops-red-button"><Plus size={16} /> Create Exam</button>
       </form>
     </Panel>
   );
@@ -398,8 +447,18 @@ function ExamPublishActions({ exam, onSaved, setMessage }) {
       setMessage("Unable to publish result.");
     }
   }
+  async function duplicate() {
+    try {
+      await api(`/exams/${exam.id}/duplicate/`, { method: "POST" });
+      setMessage("Exam duplicated as draft");
+      onSaved();
+    } catch {
+      setMessage("Unable to duplicate this exam.");
+    }
+  }
   return (
     <>
+      <button className="ops-icon" title="Duplicate exam" onClick={duplicate}><Copy size={15} /></button>
       {!exam.is_published && <button className="ops-icon" title="Publish exam" onClick={publish}><Send size={15} /></button>}
       {!exam.result_published && <button className="ops-icon" title="Publish result" onClick={publishResults}><Trophy size={15} /></button>}
     </>
@@ -407,11 +466,13 @@ function ExamPublishActions({ exam, onSaved, setMessage }) {
 }
 
 function QuestionBuilder({ exam, exams, setSelectedId, onSaved, setMessage }) {
-  const [form, setForm] = useState({ text: "", question_type: "mcq", marks: "1", options: ["", "", "", ""], correct_answer: "", expected_answer: "" });
+  const [form, setForm] = useState({ text: "", question_type: "mcq", marks: "1", options: ["", "", "", ""], correct_answer: "", expected_answer: "", explanation: "" });
   const [editingId, setEditingId] = useState("");
   const [editDraft, setEditDraft] = useState({});
   const [bankQuestions, setBankQuestions] = useState([]);
   const [selectedBankIds, setSelectedBankIds] = useState([]);
+  const [bulkFile, setBulkFile] = useState(null);
+  const [bulkResult, setBulkResult] = useState(null);
   const toast = useToast();
   useEffect(() => {
     if (!exam?.class_level || !exam?.subject) return;
@@ -446,6 +507,33 @@ function QuestionBuilder({ exam, exams, setSelectedId, onSaved, setMessage }) {
       setMessage("Unable to add question bank items.");
       toast?.show("Unable to add question bank items.", "error");
     }
+  }
+  async function uploadBulk(event) {
+    event.preventDefault();
+    if (!bulkFile) return;
+    const body = new FormData();
+    body.append("file", bulkFile);
+    try {
+      const result = await api(`/exams/${exam.id}/questions/bulk-import/`, { method: "POST", body });
+      setBulkResult(result);
+      setBulkFile(null);
+      setMessage(`${result.valid_count || 0} questions imported`);
+      toast?.show(`${result.valid_count || 0} questions imported`);
+      onSaved();
+    } catch (err) {
+      setBulkResult(err.data || { errors: [{ row: "-", error: err.message || "Unable to import questions." }] });
+      setMessage("Bulk import failed. Fix the listed rows and upload again.");
+      toast?.show("Bulk import failed.", "error");
+    }
+  }
+  function downloadTemplate() {
+    const rows = [
+      ["Question", "Type", "Option A", "Option B", "Option C", "Option D", "Correct Answer", "Expected Answer", "Marks", "Chapter", "Difficulty", "Explanation"],
+      ["What is 2 + 2?", "mcq", "2", "3", "4", "5", "4", "", "1", "Numbers", "Easy", "Basic addition"],
+      ["The Sun rises in the east.", "true_false", "", "", "", "", "True", "", "1", "General", "Easy", ""],
+      ["Explain photosynthesis.", "short", "", "", "", "", "", "Plants make food using sunlight.", "3", "Biology", "Medium", ""],
+    ];
+    downloadCsv("exam-question-template.csv", rows);
   }
   async function deleteQuestion(question) {
     try {
@@ -482,21 +570,42 @@ function QuestionBuilder({ exam, exams, setSelectedId, onSaved, setMessage }) {
   return (
     <>
       <div className="ops-tools"><Search size={16} /><select value={exam.id} onChange={(event) => setSelectedId(event.target.value)}>{exams.map((item) => <option key={item.id} value={item.id}>{item.name} / Class {item.class_level}</option>)}</select></div>
-      <form className="ops-form exam-question-form" onSubmit={addQuestion}>
-        <textarea placeholder="Question text" value={form.text} onChange={(event) => setForm({ ...form, text: event.target.value })} required />
-        <select value={form.question_type} onChange={(event) => setForm({ ...form, question_type: event.target.value, correct_answer: "" })}>
+      <form className="ops-form exam-question-form exam-form-labelled" onSubmit={addQuestion}>
+        <label className="span-field">Question<textarea value={form.text} onChange={(event) => setForm({ ...form, text: event.target.value })} required /></label>
+        <label>Question Type<select value={form.question_type} onChange={(event) => setForm({ ...form, question_type: event.target.value, correct_answer: "" })}>
           <option value="mcq">MCQ</option>
           <option value="true_false">True / False</option>
           <option value="short">Short Answer</option>
           <option value="long">Long Answer</option>
-        </select>
-        <input inputMode="decimal" placeholder="Marks" value={form.marks} onChange={(event) => setForm({ ...form, marks: event.target.value })} required />
-        {form.question_type === "mcq" && form.options.map((option, index) => <input key={index} placeholder={`Option ${String.fromCharCode(65 + index)}`} value={option} onChange={(event) => setForm({ ...form, options: form.options.map((item, itemIndex) => itemIndex === index ? event.target.value : item) })} required={index < 2} />)}
-        {form.question_type === "true_false" && <select value={form.correct_answer} onChange={(event) => setForm({ ...form, correct_answer: event.target.value })} required><option value="">Correct Answer</option><option>True</option><option>False</option></select>}
-        {form.question_type === "mcq" && <input placeholder="Correct Answer" value={form.correct_answer} onChange={(event) => setForm({ ...form, correct_answer: event.target.value })} required />}
-        {["short", "long"].includes(form.question_type) && <textarea placeholder="Expected/model answer" value={form.expected_answer} onChange={(event) => setForm({ ...form, expected_answer: event.target.value })} />}
+        </select></label>
+        <label>Marks<input inputMode="decimal" value={form.marks} onChange={(event) => setForm({ ...form, marks: event.target.value })} required /></label>
+        {form.question_type === "mcq" && form.options.map((option, index) => <label key={index}>Option {String.fromCharCode(65 + index)}<input value={option} onChange={(event) => setForm({ ...form, options: form.options.map((item, itemIndex) => itemIndex === index ? event.target.value : item) })} required={index < 2} /></label>)}
+        {form.question_type === "true_false" && <label>Correct Answer<select value={form.correct_answer} onChange={(event) => setForm({ ...form, correct_answer: event.target.value })} required><option value="">Select answer</option><option>True</option><option>False</option></select></label>}
+        {form.question_type === "mcq" && <label>Correct Answer<input value={form.correct_answer} onChange={(event) => setForm({ ...form, correct_answer: event.target.value })} required /></label>}
+        {["short", "long"].includes(form.question_type) && <label className="span-field">Expected / Model Answer<textarea value={form.expected_answer} onChange={(event) => setForm({ ...form, expected_answer: event.target.value })} required /></label>}
+        <label className="span-field">Explanation<textarea value={form.explanation} onChange={(event) => setForm({ ...form, explanation: event.target.value })} /></label>
         <button className="ops-red-button"><Plus size={16} /> Add Question</button>
       </form>
+      <div className="exam-question-form">
+        <div className="ops-panel-title-row">
+          <h2><Upload size={18} /> Bulk Upload Questions</h2>
+          <button className="ops-soft-button" type="button" onClick={downloadTemplate}><Download size={16} /> Download Template</button>
+        </div>
+        <form className="bulk-import-form" onSubmit={uploadBulk}>
+          <input type="file" accept=".csv,.xlsx" onChange={(event) => setBulkFile(event.target.files?.[0] || null)} />
+          <button className="ops-red-button" disabled={!bulkFile}><Upload size={16} /> Upload Questions</button>
+        </form>
+        {bulkResult && (
+          <div className="bulk-import-result">
+            <div className="bulk-import-summary">
+              <span className="ok">{bulkResult.total_rows || 0} rows found</span>
+              <span className="ok">{bulkResult.valid_count || 0} valid</span>
+              <span className={(bulkResult.invalid_count || 0) ? "warn" : "ok"}>{bulkResult.invalid_count || 0} errors</span>
+            </div>
+            {(bulkResult.errors || []).length > 0 && <ul className="bulk-import-errors">{bulkResult.errors.map((error, index) => <li key={index}>Row {error.row}: {error.error}</li>)}</ul>}
+          </div>
+        )}
+      </div>
       <div className="exam-question-form">
         <div className="ops-panel-title-row">
           <h2><FileQuestion size={18} /> Add from Question Bank</h2>
@@ -576,7 +685,7 @@ function ExamSubmissions({ exam, exams, setSelectedId, onSaved, setMessage }) {
   return (
     <>
       <div className="ops-tools"><Search size={16} /><select value={exam.id} onChange={(event) => setSelectedId(event.target.value)}>{exams.map((item) => <option key={item.id} value={item.id}>{item.name} / Class {item.class_level}</option>)}</select></div>
-      <CompactTable columns={["Student", "Status", "Score", "Violations", "Submitted"]} rows={(exam.attempts || []).map((item) => [item.student?.name || "-", item.status, `${item.score || 0}/${exam.total_marks}`, `${item.violation_count || 0}/${item.max_violations || 1}`, formatDateTime(item.submitted_at)])} />
+      <CompactTable columns={["Student ID", "Student", "Started", "Submitted", "Score", "Status", "Submission Type"]} rows={(exam.attempts || []).map((item) => [item.student?.student_id || "-", item.student?.name || "-", formatDateTime(item.started_at), formatDateTime(item.submitted_at), `${item.score || 0}/${exam.total_marks}`, item.status, submissionType(item)])} />
       {(exam.attempts || []).length > 0 && (
         <div className="ops-tools"><Search size={16} /><select value={attempt?.id || ""} onChange={(event) => setSelectedAttemptId(event.target.value)}>{(exam.attempts || []).map((item) => <option key={item.id} value={item.id}>{item.student?.name || "Student"} / {item.status}</option>)}</select></div>
       )}
@@ -631,6 +740,7 @@ function EvaluationPanel({ exam, attempt, onSaved, setMessage }) {
 
 function StudentExamCard({ exam, onSaved, setMessage }) {
   const [taking, setTaking] = useState(false);
+  const [startPreview, setStartPreview] = useState(false);
   const [attempt, setAttempt] = useState(exam.attempt);
   const [activeExam, setActiveExam] = useState(exam);
   async function start() {
@@ -653,17 +763,36 @@ function StudentExamCard({ exam, onSaved, setMessage }) {
   }
   if (taking && attempt) return <ExamTakingPanel exam={activeExam} attempt={attempt} setAttempt={setAttempt} setMessage={setMessage} onSaved={onSaved} />;
   const resultVisible = exam.result_published && attempt;
+  if (startPreview) {
+    return (
+      <article className="exam-start-card">
+        <div className="ops-file-icon"><FileCheck2 size={18} /></div>
+        <div>
+          <strong>{exam.name}</strong>
+          <span>{exam.subject} / {exam.question_count || 0} questions / {exam.total_marks} marks / {exam.duration_minutes} min</span>
+          <small>Passing Marks: {exam.passing_marks || 0}. Negative Marking: Not configured.</small>
+          <small>{exam.instructions || "Read all questions carefully before submitting."}</small>
+          <small>During the exam, leaving the exam tab or exiting fullscreen may automatically submit your exam.</small>
+        </div>
+        <StatusBadge value={formatExamStatus(exam.status)} />
+        <div className="ops-actions">
+          <button className="ops-soft-button" type="button" onClick={() => setStartPreview(false)}>Back</button>
+          <button className="ops-red-button" type="button" onClick={start}>Start Exam</button>
+        </div>
+      </article>
+    );
+  }
   return (
     <article>
       <div className="ops-file-icon"><FileCheck2 size={18} /></div>
       <div>
         <strong>{exam.name}</strong>
-        <span>{exam.subject} / {formatDateTime(exam.start_time)} / {exam.duration_minutes} min</span>
+        <span>{exam.subject} / {formatDateTime(exam.start_time)} / {exam.duration_minutes} min / {exam.total_marks} marks</span>
         <small>{exam.instructions || "Read all questions carefully before submitting."}</small>
         {resultVisible && <small>Result: {attempt.score || 0}/{exam.total_marks} / {Number(attempt.score || 0) >= Number(exam.passing_marks || 0) ? "Pass" : "Fail"}</small>}
       </div>
-      <StatusBadge value={resultVisible ? "Result Published" : exam.status} />
-      {exam.status === "active" && !attempt?.submitted_at && <button className="ops-red-button" onClick={start}>Start Exam</button>}
+      <StatusBadge value={resultVisible ? "Result Published" : formatExamStatus(exam.status)} />
+      {exam.status === "active" && !attempt?.submitted_at && <button className="ops-red-button" onClick={() => setStartPreview(true)}>Start Exam</button>}
       {exam.status === "upcoming" && <button className="ops-soft-button" type="button">Exam starts at {formatDateTime(exam.start_time)}</button>}
       {exam.status === "ended" && !attempt?.submitted_at && <button className="ops-soft-button" type="button">Exam Ended</button>}
       {attempt?.submitted_at && <button className="ops-soft-button" type="button">Submitted</button>}
@@ -675,11 +804,13 @@ function ExamTakingPanel({ exam, attempt, setAttempt, setMessage, onSaved }) {
   const [index, setIndex] = useState(0);
   const [confirmSubmit, setConfirmSubmit] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [answers, setAnswers] = useState(() => Object.fromEntries((attempt.answers || []).map((answer) => [answer.question_id, answer.answer])));
+  const storageKey = `redhero_exam_answers_${attempt.id}`;
+  const [answers, setAnswers] = useState(() => ({ ...readStoredAnswers(storageKey), ...Object.fromEntries((attempt.answers || []).map((answer) => [answer.question_id, answer.answer])) }));
   const [remaining, setRemaining] = useState(timeRemaining(attempt.deadline));
   const lastViolationAt = useRef(0);
   const reportingViolation = useRef(false);
   const violationHandled = useRef(false);
+  const lastSaved = useRef(Object.fromEntries((attempt.answers || []).map((answer) => [answer.question_id, answer.answer])));
   const submitted = Boolean(attempt.submitted_at || attempt.status !== "in_progress");
   const question = (exam.questions || [])[index];
   useEffect(() => {
@@ -707,6 +838,7 @@ function ExamTakingPanel({ exam, attempt, setAttempt, setMessage, onSaved }) {
         setAttempt(data.attempt);
         setMessage(data.message || "Your exam was automatically submitted because you left the exam screen.");
         if (data.auto_submitted || data.attempt?.submitted_at) {
+          localStorage.removeItem(storageKey);
           setSubmitting(true);
           onSaved();
         }
@@ -750,12 +882,21 @@ function ExamTakingPanel({ exam, attempt, setAttempt, setMessage, onSaved }) {
       document.removeEventListener("contextmenu", blockClipboard);
       document.removeEventListener("keydown", blockShortcut);
     };
-  }, [attempt.id, submitted, submitting, setAttempt, setMessage, onSaved]);
+  }, [attempt.id, storageKey, submitted, submitting, setAttempt, setMessage, onSaved]);
+  useEffect(() => {
+    if (submitted || submitting) return undefined;
+    writeStoredAnswers(storageKey, answers);
+    const pending = Object.entries(answers).find(([qid, value]) => lastSaved.current[qid] !== value);
+    if (!pending) return undefined;
+    const timer = window.setTimeout(() => saveAnswer(pending[0], pending[1], true), 700);
+    return () => window.clearTimeout(timer);
+  }, [answers, storageKey, submitted, submitting]);
   async function saveAnswer(qid = question?.question_id, value = answers[qid]) {
     if (!qid || submitted || submitting) return;
     try {
       const data = await api(`/exam-attempts/${attempt.id}/answers/`, { method: "POST", body: JSON.stringify({ question_id: qid, answer: value || "" }) });
       setAttempt(data.attempt);
+      lastSaved.current[qid] = value || "";
     } catch {
       setMessage("Unable to save your answer. Please try again.");
     }
@@ -767,6 +908,7 @@ function ExamTakingPanel({ exam, attempt, setAttempt, setMessage, onSaved }) {
     try {
       const data = await api(`/exam-attempts/${attempt.id}/submit/`, { method: "POST" });
       setAttempt(data.attempt);
+      localStorage.removeItem(storageKey);
       setMessage(data.attempt?.auto_submitted ? "Your exam was automatically submitted because you left the exam screen." : auto ? "Time is over. Your exam has been submitted." : "Your exam has been submitted successfully.");
       onSaved();
     } catch {
@@ -785,13 +927,25 @@ function ExamTakingPanel({ exam, attempt, setAttempt, setMessage, onSaved }) {
         <h3>{question.text}</h3>
         {["mcq", "true_false"].includes(question.question_type) ? (
           <div className="exam-options">
-            {(question.options || []).map((option) => <button className={answers[question.question_id] === option ? "active" : ""} key={option} disabled={submitted || submitting} onClick={() => { setAnswers({ ...answers, [question.question_id]: option }); saveAnswer(question.question_id, option); }}>{option}</button>)}
+            {(question.options || []).map((option) => <button className={answers[question.question_id] === option ? "active" : ""} key={option} disabled={submitted || submitting} onClick={() => setAnswers({ ...answers, [question.question_id]: option })}>{option}</button>)}
           </div>
         ) : (
           <textarea value={answers[question.question_id] || ""} disabled={submitted || submitting} onChange={(event) => setAnswers({ ...answers, [question.question_id]: event.target.value })} onBlur={() => saveAnswer()} placeholder="Write your answer" />
         )}
         <small>Exam screen lock active</small>
       </article>
+      <div className="exam-question-nav">
+        {(exam.questions || []).map((item, itemIndex) => (
+          <button
+            key={item.question_id}
+            className={`${itemIndex === index ? "current" : ""} ${answers[item.question_id] ? "answered" : ""}`}
+            onClick={() => { saveAnswer(); setIndex(itemIndex); }}
+            type="button"
+          >
+            {itemIndex + 1}
+          </button>
+        ))}
+      </div>
       <div className="ops-actions">
         <button className="ops-soft-button" disabled={index === 0} onClick={() => setIndex(Math.max(0, index - 1))}>Previous</button>
         <button className="ops-soft-button" disabled={submitted || submitting} onClick={() => { saveAnswer(); setIndex(Math.min(exam.questions.length - 1, index + 1)); }}>Save & Next</button>
@@ -820,13 +974,14 @@ function TimetableDetail({ data, user, onSaved, setMessage }) {
 }
 
 function FeesDetail({ data, user, onSaved, setMessage }) {
-  const total = data.fees.reduce((sum, row) => sum + Number(row.annual_fee || 0), 0);
+  const summary = data.feeSummary || {};
   return (
     <div className="ops-detail-grid">
       {user.role === "super_admin" && <FeeForm onSaved={onSaved} setMessage={setMessage} />}
-      <MetricDeck metrics={[["Total Fees", money(total)], ["Paid", "Not tracked"], ["Pending", "Not tracked"], ["Overdue", "Not tracked"]]} />
+      {user.role === "super_admin" && <FeePaymentForm students={data.students} paymentModes={data.paymentModes} onSaved={onSaved} setMessage={setMessage} />}
+      <MetricDeck metrics={[["Total Fees", money(summary.total_fees || 0)], ["Paid", money(summary.paid || 0)], ["Pending", money(summary.pending || 0)], ["Overdue", money(summary.overdue || 0)]]} />
       <Panel title="Fee Records" icon={IndianRupee} className="span-3">
-        <FeesTable user={user} rows={data.fees} onSaved={onSaved} setMessage={setMessage} />
+        <FeesTable user={user} rows={data.feeStudentRecords || []} structures={data.fees || []} onSaved={onSaved} setMessage={setMessage} />
       </Panel>
       <Panel title="Installment Summary" icon={WalletCards} className="span-3">
         <div className="ops-installments">
@@ -834,6 +989,7 @@ function FeesDetail({ data, user, onSaved, setMessage }) {
             <article key={fee.id}>
               <strong>Class {fee.class_level}</strong>
               {Object.keys(fee.installments || {}).length > 0 ? Object.entries(fee.installments).map(([label, value]) => <span key={label}>{label}: {money(value)}</span>) : <span>No installment breakdown recorded.</span>}
+              {fee.due_date && <span>Due: {formatDate(fee.due_date)}</span>}
             </article>
           ))}
           {data.fees.length === 0 && <EmptyState title="No fee records" />}
@@ -861,7 +1017,7 @@ function MetricDeck({ metrics }) {
       {metrics.map(([label, value]) => (
         <article key={label}>
           <span>{label}</span>
-          <strong>{value}</strong>
+          <strong><AnimatedValue value={value} /></strong>
         </article>
       ))}
     </section>
@@ -943,15 +1099,21 @@ function MarksForm({ students, onSaved, setMessage }) {
 }
 
 function AssignmentForm({ onSaved, setMessage }) {
-  const [form, setForm] = useState({ title: "", description: "", class_level: "10", subject: "", deadline: "" });
+  const [form, setForm] = useState({ title: "", description: "", class_level: "10", subject: "", due_date: "", due_time: "", file_url: "" });
   const toast = useToast();
   async function submit(event) {
     event.preventDefault();
+    const deadline = combineDateTime(form.due_date, form.due_time);
+    if (!deadline) {
+      setMessage("Due date and due time are required.");
+      toast?.show("Due date and due time are required.", "error");
+      return;
+    }
     try {
-      await api("/assignments/", { method: "POST", body: JSON.stringify(form) });
+      await api("/assignments/", { method: "POST", body: JSON.stringify({ ...form, deadline }) });
       setMessage("Assignment created");
       toast?.show("Assignment created");
-      setForm({ title: "", description: "", class_level: "10", subject: "", deadline: "" });
+      setForm({ title: "", description: "", class_level: "10", subject: "", due_date: "", due_time: "", file_url: "" });
       onSaved();
     } catch (err) {
       setMessage(err.message);
@@ -960,13 +1122,15 @@ function AssignmentForm({ onSaved, setMessage }) {
   }
   return (
     <Panel title="Create Assignment" icon={Plus} className="span-3">
-      <form className="ops-form" onSubmit={submit}>
-        <input placeholder="Title" value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} required />
-        <input placeholder="Subject" value={form.subject} onChange={(event) => setForm({ ...form, subject: event.target.value })} required />
-        <input placeholder="Class" value={form.class_level} onChange={(event) => setForm({ ...form, class_level: event.target.value })} required />
-        <input type="datetime-local" value={form.deadline} onChange={(event) => setForm({ ...form, deadline: event.target.value })} required />
-        <textarea placeholder="Description" value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} required />
-        <button className="ops-red-button"><Plus size={16} /> Create</button>
+      <form className="ops-form assignment-form-labelled" onSubmit={submit}>
+        <label>Assignment Title<input value={form.title} onChange={(event) => setForm({ ...form, title: event.target.value })} required /></label>
+        <label>Class<select value={form.class_level} onChange={(event) => setForm({ ...form, class_level: event.target.value })} required>{["6", "7", "8", "9", "10", "11", "12"].map((classLevel) => <option key={classLevel} value={classLevel}>Class {classLevel}</option>)}</select></label>
+        <label>Subject<input value={form.subject} onChange={(event) => setForm({ ...form, subject: event.target.value })} required /></label>
+        <label>Due Date<input type="date" value={form.due_date} onChange={(event) => setForm({ ...form, due_date: event.target.value })} required /></label>
+        <label>Due Time<input type="time" value={form.due_time} onChange={(event) => setForm({ ...form, due_time: event.target.value })} required /></label>
+        <label className="span-field">Attachment / Resource URL<input value={form.file_url} onChange={(event) => setForm({ ...form, file_url: event.target.value })} /></label>
+        <label className="span-field">Description<textarea value={form.description} onChange={(event) => setForm({ ...form, description: event.target.value })} required /></label>
+        <button className="ops-red-button"><Plus size={16} /> Create Assignment</button>
       </form>
     </Panel>
   );
@@ -1002,13 +1166,13 @@ function TimetableForm({ onSaved, setMessage }) {
 }
 
 function FeeForm({ onSaved, setMessage }) {
-  const [form, setForm] = useState({ class_level: "10", annual_fee: "", installments: "" });
+  const [form, setForm] = useState({ class_level: "10", annual_fee: "", due_date: "", installments: "" });
   const toast = useToast();
   async function submit(event) {
     event.preventDefault();
     try {
       const installments = form.installments ? Object.fromEntries(form.installments.split(",").map((item) => item.split(":").map((part) => part.trim()))) : {};
-      await api("/fees/", { method: "POST", body: JSON.stringify({ class_level: form.class_level, annual_fee: form.annual_fee, installments }) });
+      await api("/fees/", { method: "POST", body: JSON.stringify({ class_level: form.class_level, annual_fee: form.annual_fee, due_date: form.due_date, installments }) });
       setMessage("Fee structure saved");
       toast?.show("Fee structure saved");
       onSaved();
@@ -1019,11 +1183,50 @@ function FeeForm({ onSaved, setMessage }) {
   }
   return (
     <Panel title="Add Fee Structure" icon={Plus} className="span-3">
-      <form className="ops-form" onSubmit={submit}>
-        <input placeholder="Class" value={form.class_level} onChange={(event) => setForm({ ...form, class_level: event.target.value })} required />
-        <input inputMode="decimal" placeholder="Annual Fee" value={form.annual_fee} onChange={(event) => setForm({ ...form, annual_fee: event.target.value })} required />
-        <input placeholder="Installments e.g. Term 1:25000, Term 2:25000" value={form.installments} onChange={(event) => setForm({ ...form, installments: event.target.value })} />
+      <form className="ops-form fee-form-labelled" onSubmit={submit}>
+        <label>Class<select value={form.class_level} onChange={(event) => setForm({ ...form, class_level: event.target.value })} required>
+          {["6", "7", "8", "9", "10", "11", "12"].map((classLevel) => <option key={classLevel} value={classLevel}>Class {classLevel}</option>)}
+        </select></label>
+        <label>Annual Fee<input inputMode="decimal" value={form.annual_fee} onChange={(event) => setForm({ ...form, annual_fee: event.target.value })} required /></label>
+        <label>Due Date<input type="date" value={form.due_date} onChange={(event) => setForm({ ...form, due_date: event.target.value })} /></label>
+        <label className="span-field">Installments<input placeholder="Term 1:9000, Term 2:9000" value={form.installments} onChange={(event) => setForm({ ...form, installments: event.target.value })} /></label>
         <button className="ops-red-button"><Save size={16} /> Save</button>
+      </form>
+    </Panel>
+  );
+}
+
+function FeePaymentForm({ students = [], paymentModes = [], onSaved, setMessage }) {
+  const [form, setForm] = useState({ student: "", amount: "", payment_date: new Date().toISOString().slice(0, 10), payment_mode: "Cash", reference: "", installment: "", note: "" });
+  const toast = useToast();
+  const modes = paymentModes.length ? paymentModes : ["Cash", "UPI", "Bank Transfer", "Cheque", "Other"];
+  async function submit(event) {
+    event.preventDefault();
+    try {
+      await api("/fees/payments/", { method: "POST", body: JSON.stringify(form) });
+      setMessage("Payment recorded");
+      toast?.show("Payment recorded");
+      setForm({ ...form, amount: "", reference: "", installment: "", note: "" });
+      onSaved();
+    } catch (err) {
+      setMessage(err.message);
+      toast?.show(err.message, "error");
+    }
+  }
+  return (
+    <Panel title="Record Payment" icon={Plus} className="span-3">
+      <form className="ops-form fee-form-labelled" onSubmit={submit}>
+        <label>Student<select value={form.student} onChange={(event) => setForm({ ...form, student: event.target.value })} required>
+          <option value="">Select student</option>
+          {students.map((student) => <option key={student.id} value={student.id}>{student.student_id} / {student.name} / Class {student.class_level}</option>)}
+        </select></label>
+        <label>Amount Paid<input inputMode="decimal" value={form.amount} onChange={(event) => setForm({ ...form, amount: event.target.value })} required /></label>
+        <label>Payment Date<input type="date" value={form.payment_date} onChange={(event) => setForm({ ...form, payment_date: event.target.value })} required /></label>
+        <label>Payment Mode<select value={form.payment_mode} onChange={(event) => setForm({ ...form, payment_mode: event.target.value })}>{modes.map((mode) => <option key={mode}>{mode}</option>)}</select></label>
+        <label>Installment<input value={form.installment} onChange={(event) => setForm({ ...form, installment: event.target.value })} /></label>
+        <label>Reference<input value={form.reference} onChange={(event) => setForm({ ...form, reference: event.target.value })} /></label>
+        <label className="span-field">Note<input value={form.note} onChange={(event) => setForm({ ...form, note: event.target.value })} /></label>
+        <button className="ops-red-button"><Save size={16} /> Record Payment</button>
       </form>
     </Panel>
   );
@@ -1058,10 +1261,31 @@ function MarksTable({ user, rows, onSaved, setMessage }) {
   />;
 }
 
-function FeesTable({ user, rows, onSaved, setMessage }) {
+function FeesTable({ user, rows, structures = [], onSaved, setMessage }) {
+  if (rows.length > 0) {
+    return <EditableTable
+      rows={rows.map((row) => ({ ...row, id: row.student?.id || `${row.class_level}-${row.student?.student_id}` }))}
+      columns={[
+        ["Student ID", (row) => row.student?.student_id || "-"],
+        ["Student Name", (row) => row.student?.name || "-"],
+        ["Class", (row) => `Class ${row.class_level}`],
+        ["Total Fees", (row) => money(row.total_fee)],
+        ["Paid", (row) => money(row.paid)],
+        ["Pending", (row) => money(row.pending)],
+        ["Due Date", (row) => formatDate(row.due_date)],
+        ["Status", (row) => <StatusBadge value={row.status} />],
+        ["Payment History", (row) => <PaymentHistory payments={row.payments || []} />],
+      ]}
+      editFields={[]}
+      canEdit={false}
+      canDelete={false}
+      onSaved={onSaved}
+      setMessage={setMessage}
+    />;
+  }
   return <EditableTable
-    rows={rows}
-    columns={[["Class", (row) => `Class ${row.class_level}`], ["Total Fees", (row) => money(row.annual_fee)], ["Paid", () => "Not tracked"], ["Pending", () => "Not tracked"], ["Updated", (row) => formatDate(row.updated_at)]]}
+    rows={structures}
+    columns={[["Class", (row) => `Class ${row.class_level}`], ["Total Fees", (row) => money(row.annual_fee)], ["Paid", () => money(0)], ["Pending", (row) => money(row.annual_fee || 0)], ["Due Date", (row) => formatDate(row.due_date)], ["Updated", (row) => formatDate(row.updated_at)]]}
     editFields={[]}
     canEdit={false}
     canDelete={user.role === "super_admin"}
@@ -1069,6 +1293,20 @@ function FeesTable({ user, rows, onSaved, setMessage }) {
     onSaved={onSaved}
     setMessage={setMessage}
   />;
+}
+
+function PaymentHistory({ payments }) {
+  if (!payments.length) return <span>No payments recorded</span>;
+  return (
+    <div className="fee-history">
+      {payments.slice(0, 3).map((payment) => (
+        <span key={payment.id}>
+          {formatDate(payment.payment_date)} / {money(payment.amount)} / {payment.payment_mode}{payment.reference ? ` / ${payment.reference}` : ""}
+        </span>
+      ))}
+      {payments.length > 3 && <span>+{payments.length - 3} more</span>}
+    </div>
+  );
 }
 
 function TimetableGrid({ rows, user, onSaved, setMessage }) {
@@ -1196,8 +1434,9 @@ function EditableTable({ rows, columns, editFields, canEdit, canDelete, onSave, 
 
 function AssignmentRow({ item, user, onSaved, setMessage }) {
   const [editing, setEditing] = useState(false);
-  const [draft, setDraft] = useState({ title: item.title, subject: item.subject, class_level: item.class_level, deadline: toDateTimeLocal(item.deadline), description: item.description || "" });
+  const [draft, setDraft] = useState({ title: item.title, subject: item.subject, class_level: item.class_level, deadline: toDateTimeLocal(item.deadline), description: item.description || "", file_url: item.file_url || "" });
   const [answer, setAnswer] = useState("");
+  const [fileUrl, setFileUrl] = useState("");
   const [confirm, setConfirm] = useState(false);
   const toast = useToast();
   const canManage = user.role !== "student";
@@ -1231,8 +1470,9 @@ function AssignmentRow({ item, user, onSaved, setMessage }) {
   async function submit(event) {
     event.preventDefault();
     try {
-      await api(`/assignments/${item.id}/submit/`, { method: "POST", body: JSON.stringify({ answer_text: answer }) });
+      await api(`/assignments/${item.id}/submit/`, { method: "POST", body: JSON.stringify({ answer_text: answer, file_url: fileUrl }) });
       setAnswer("");
+      setFileUrl("");
       setMessage("Assignment submitted");
       toast?.show("Assignment submitted");
       onSaved();
@@ -1250,15 +1490,19 @@ function AssignmentRow({ item, user, onSaved, setMessage }) {
           <div className="ops-inline-edit">
             <input value={draft.title} onChange={(event) => setDraft({ ...draft, title: event.target.value })} />
             <input value={draft.subject} onChange={(event) => setDraft({ ...draft, subject: event.target.value })} />
-            <input value={draft.class_level} onChange={(event) => setDraft({ ...draft, class_level: event.target.value })} />
+            <select value={draft.class_level} onChange={(event) => setDraft({ ...draft, class_level: event.target.value })}>{["6", "7", "8", "9", "10", "11", "12"].map((classLevel) => <option key={classLevel} value={classLevel}>Class {classLevel}</option>)}</select>
             <input type="datetime-local" value={draft.deadline} onChange={(event) => setDraft({ ...draft, deadline: event.target.value })} />
+            <input placeholder="Resource URL" value={draft.file_url} onChange={(event) => setDraft({ ...draft, file_url: event.target.value })} />
             <textarea value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} />
           </div>
         ) : (
           <>
             <strong>{item.title}</strong>
-            <span>Class {item.class_level} / {item.subject} / Due {formatDate(item.deadline)}</span>
+            <span>Class {item.class_level} / {item.subject} / Due {formatDateTime(item.deadline)}</span>
             {item.description && <small>{item.description}</small>}
+            {item.file_url && <small><a href={item.file_url} target="_blank" rel="noreferrer">Open attachment / resource</a></small>}
+            {user.role === "student" && item.own_submission && <small>Submitted: {item.own_submission.file_url ? <a href={item.own_submission.file_url} target="_blank" rel="noreferrer">View submitted file</a> : item.own_submission.answer_text || "Submission recorded"}</small>}
+            {canManage && <small>{item.submission_count || 0} submissions</small>}
           </>
         )}
       </div>
@@ -1269,8 +1513,8 @@ function AssignmentRow({ item, user, onSaved, setMessage }) {
         {editing && <button className="ops-icon" title="Save" onClick={save}><Save size={15} /></button>}
         {editing && <button className="ops-icon" title="Cancel" onClick={() => setEditing(false)}><X size={15} /></button>}
       </div>
-      {user.role === "student" && !item.own_submission && <form className="ops-submit-form" onSubmit={submit}><input placeholder="Submission note" value={answer} onChange={(event) => setAnswer(event.target.value)} /><button className="ops-soft-button"><Send size={15} /> Submit</button></form>}
-      {canManage && (item.submissions || []).length > 0 && <div className="ops-submission-strip">{(item.submissions || []).map((submission) => <span key={submission.id}>{submission.student?.name || "Student"} / {formatDate(submission.submitted_at)}</span>)}</div>}
+      {user.role === "student" && !item.own_submission && <form className="ops-submit-form assignment-submit-form" onSubmit={submit}><input placeholder="Submission note" value={answer} onChange={(event) => setAnswer(event.target.value)} /><input placeholder="Submitted file URL" value={fileUrl} onChange={(event) => setFileUrl(event.target.value)} /><button className="ops-soft-button"><Send size={15} /> Submit</button></form>}
+      {canManage && (item.submissions || []).length > 0 && <div className="ops-submission-strip">{(item.submissions || []).map((submission) => <span key={submission.id}>{submission.student?.student_id || "-"} / {submission.student?.name || "Student"} / {assignmentSubmissionStatus(submission)} / {formatDateTime(submission.submitted_at)}</span>)}</div>}
       <ConfirmDialog open={confirm} title="Delete assignment?" message="This assignment will be removed." confirmLabel="Delete" onCancel={() => setConfirm(false)} onConfirm={remove} />
     </article>
   );
@@ -1306,6 +1550,25 @@ function StatusBadge({ value }) {
   return <span className={`ops-status ${normalized.replace(/\s+/g, "-")}`}>{value || "-"}</span>;
 }
 
+function formatExamStatus(value) {
+  if (value === "upcoming") return "Scheduled";
+  if (value === "ended") return "Completed";
+  if (value === "active") return "Active";
+  if (value === "draft") return "Draft";
+  return value || "-";
+}
+
+function submissionType(attempt) {
+  if (!attempt?.submitted_at) return "-";
+  if (attempt.auto_submitted) {
+    if (attempt.auto_submit_reason === "fullscreen_exit") return "Fullscreen Exit";
+    if (attempt.auto_submit_reason === "tab_window_exit") return "Tab/Window Exit";
+    return "Tab/Window Exit";
+  }
+  if (attempt.status === "expired") return "Time Expired";
+  return "Manual";
+}
+
 function CompactTable({ columns, rows }) {
   return (
     <div className="ops-table-wrap compact-table">
@@ -1318,6 +1581,47 @@ function CompactTable({ columns, rows }) {
   );
 }
 
+function minutesBetween(startValue, endValue) {
+  const start = new Date(startValue);
+  const end = new Date(endValue);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) return 0;
+  return Math.round((end.getTime() - start.getTime()) / 60000);
+}
+
+function addMinutesLocal(value, minutes) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime()) || !Number.isFinite(minutes) || minutes <= 0) return "";
+  date.setMinutes(date.getMinutes() + minutes);
+  return toDateTimeLocal(date.toISOString());
+}
+
+function downloadCsv(filename, rows) {
+  const csv = rows.map((row) => row.map((cell) => `"${String(cell ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+function readStoredAnswers(key) {
+  try {
+    return JSON.parse(localStorage.getItem(key) || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function writeStoredAnswers(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify(value || {}));
+  } catch {
+    // Storage can be unavailable in private browser modes; backend autosave remains authoritative.
+  }
+}
+
 function DonutChart({ percent }) {
   return <div className="ops-donut" style={{ "--value": Number(percent || 0) }}><strong>{formatPercent(percent)}</strong><span>Overall</span></div>;
 }
@@ -1327,7 +1631,7 @@ function LineChart({ values }) {
   const points = safe.map((value, index) => `${(index / Math.max(safe.length - 1, 1)) * 100},${100 - Number(value || 0)}`).join(" ");
   return (
     <div className="ops-chart">
-      <svg viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label="Trend chart"><polyline points={points} /></svg>
+      <svg viewBox="0 0 100 100" preserveAspectRatio="none" role="img" aria-label="Trend chart"><polyline points={points} pathLength="100" /></svg>
       <div>{safe.map((value, index) => <i key={index} style={{ height: `${Math.max(4, Number(value || 0))}%` }} />)}</div>
     </div>
   );
@@ -1355,19 +1659,21 @@ function useOpsSummaries(data, user) {
   return useMemo(() => {
     const att = attendanceSummary(data.attendance);
     const markStats = marksSummary(data.marks);
-    const pending = data.assignments.filter((item) => assignmentStatus(item, user) === "Pending").length;
+    const pending = data.assignments.filter((item) => ["Pending", "Overdue"].includes(assignmentStatus(item, user))).length;
     const submitted = data.assignments.filter((item) => assignmentStatus(item, user) === "Submitted").length;
+    const completed = data.assignments.filter((item) => assignmentStatus(item, user) === "Completed").length;
     const activeExams = data.exams.filter((item) => item.status === "active").length;
-    const completedExams = data.exams.filter((item) => item.attempt?.submitted_at || item.status === "completed").length;
+    const completedExams = data.exams.filter((item) => item.attempt?.submitted_at || ["completed", "ended"].includes(item.status)).length;
     const periods = todayPeriods(data.timetables);
-    const feeTotal = data.fees.reduce((sum, row) => sum + Number(row.annual_fee || 0), 0);
+    const feeSummary = data.feeSummary || {};
+    const feeTotal = Number(feeSummary.total_fees ?? data.fees.reduce((sum, row) => sum + Number(row.annual_fee || 0), 0));
     return {
       attendance: { key: "attendance", title: "Attendance", subtitle: "Actual attendance records", value: formatPercent(att.percent), icon: ClipboardCheck, tone: "green", button: "View Attendance", metrics: [["Present", att.present], ["Absent", att.absent], ["Leave", "N/A"]].map(([label, value]) => ({ label, value })) },
       marks: { key: "marks", title: "Marks & Results", subtitle: "Recorded assessments", value: formatPercent(markStats.average), icon: Trophy, tone: "violet", button: "View Marks", metrics: [["Highest", formatPercent(markStats.highest)], ["Lowest", formatPercent(markStats.lowest)], ["Records", data.marks.length]].map(([label, value]) => ({ label, value })) },
-      assignments: { key: "assignments", title: "Assignments", subtitle: "Class assignment flow", value: data.assignments.length, icon: ListChecks, tone: "blue", button: "View Assignments", metrics: [["Pending", pending], ["Submitted", submitted], ["Completed", 0]].map(([label, value]) => ({ label, value })) },
+      assignments: { key: "assignments", title: "Assignments", subtitle: "Class assignment flow", value: data.assignments.length, icon: ListChecks, tone: "blue", button: "View Assignments", metrics: [["Pending", pending], ["Submitted", submitted], ["Completed", completed]].map(([label, value]) => ({ label, value })) },
       exams: { key: "exams", title: "Exams", subtitle: "Scheduled exam workflow", value: data.exams.length, icon: FileCheck2, tone: "red", button: "View Exams", metrics: [["Active", activeExams], ["Completed", completedExams], ["Results", data.exams.filter((item) => item.result_published).length]].map(([label, value]) => ({ label, value })) },
       timetable: { key: "timetable", title: "Timetable", subtitle: "Today schedule summary", value: periods.length, icon: CalendarClock, tone: "amber", button: "View Timetable", metrics: [["Classes", data.timetables.length], ["Periods", data.timetables.flatMap((row) => row.periods || []).length], ["Today", periods.length]].map(([label, value]) => ({ label, value })) },
-      fees: { key: "fees", title: "Fee Structure", subtitle: "Configured fee records", value: feeTotal ? money(feeTotal) : "Not set", icon: WalletCards, tone: "red", button: "View Fees", metrics: [["Records", data.fees.length], ["Paid", "N/A"], ["Pending", "N/A"]].map(([label, value]) => ({ label, value })) },
+      fees: { key: "fees", title: "Fee Structure", subtitle: "Configured fee records", value: feeTotal ? money(feeTotal) : "Not set", icon: WalletCards, tone: "red", button: "View Fees", metrics: [["Records", data.fees.length], ["Paid", money(feeSummary.paid || 0)], ["Pending", money(feeSummary.pending || 0)]].map(([label, value]) => ({ label, value })) },
     };
   }, [data, user]);
 }
@@ -1415,12 +1721,33 @@ function todayPeriods(rows) {
 }
 
 function assignmentStatus(item, user) {
-  if (user.role === "student") return item.own_submission ? "Submitted" : "Pending";
-  return Number(item.submission_count || 0) > 0 ? "Submitted" : "Pending";
+  if (item.status) return item.status;
+  if (user.role === "student") {
+    if (item.own_submission) return assignmentSubmissionStatus(item.own_submission);
+    return isPast(item.deadline) ? "Overdue" : "Pending";
+  }
+  return Number(item.submission_count || 0) > 0 ? "Submitted" : isPast(item.deadline) ? "Overdue" : "Pending";
 }
 
 function assignmentSubmissions(assignments) {
   return assignments.flatMap((assignment) => (assignment.submissions || []).map((submission) => ({ ...submission, assignmentTitle: assignment.title })));
+}
+
+function assignmentSubmissionStatus(submission) {
+  if (!submission) return "Pending";
+  if (submission.status === "late") return "Late";
+  if (submission.status === "reviewed") return "Reviewed";
+  return "Submitted";
+}
+
+function isPast(value) {
+  if (!value) return false;
+  return new Date(value).getTime() < Date.now();
+}
+
+function combineDateTime(dateValue, timeValue) {
+  if (!dateValue || !timeValue) return "";
+  return `${dateValue}T${timeValue}`;
 }
 
 function roleTitle(role) {
@@ -1489,6 +1816,12 @@ const operationsCenterStyles = `
   border-radius: 8px;
   box-shadow: 0 18px 48px rgba(0,0,0,.24);
 }
+.ops-module-card, .ops-panel, .ops-metric-deck article { animation: opsCardIn 320ms ease both; }
+.ops-summary-grid .ops-module-card:nth-child(2), .ops-metric-deck article:nth-child(2) { animation-delay: 45ms; }
+.ops-summary-grid .ops-module-card:nth-child(3), .ops-metric-deck article:nth-child(3) { animation-delay: 90ms; }
+.ops-summary-grid .ops-module-card:nth-child(4), .ops-metric-deck article:nth-child(4) { animation-delay: 135ms; }
+.ops-summary-grid .ops-module-card:nth-child(5) { animation-delay: 180ms; }
+.ops-summary-grid .ops-module-card:nth-child(6) { animation-delay: 225ms; }
 .ops-module-card { display: grid; gap: 14px; min-height: 208px; padding: 16px; }
 .ops-module-card header, .ops-panel > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .ops-module-card header > div:last-child { min-width: 0; }
@@ -1535,10 +1868,10 @@ const operationsCenterStyles = `
 .ops-chart { min-height: 260px; position: relative; border: 1px solid rgba(148,163,184,.13); border-radius: 8px; background: linear-gradient(180deg, rgba(8,18,32,.9), rgba(6,13,24,.9)); overflow: hidden; }
 .ops-chart::before, .ops-bars::before { content: ""; position: absolute; inset: 0; background-image: linear-gradient(rgba(148,163,184,.07) 1px, transparent 1px), linear-gradient(90deg, rgba(148,163,184,.07) 1px, transparent 1px); background-size: 44px 44px; pointer-events: none; }
 .ops-chart svg { position: absolute; inset: 18px; width: calc(100% - 36px); height: calc(100% - 36px); overflow: visible; }
-.ops-chart polyline { fill: none; stroke: #fb4d5f; stroke-width: 3; vector-effect: non-scaling-stroke; filter: drop-shadow(0 0 10px rgba(251,77,95,.45)); }
+.ops-chart polyline { fill: none; stroke: #fb4d5f; stroke-width: 3; vector-effect: non-scaling-stroke; filter: drop-shadow(0 0 10px rgba(251,77,95,.45)); stroke-dasharray: 100; animation: opsLineDraw 420ms ease both; }
 .ops-chart div { position: absolute; inset: 18px; display: grid; grid-template-columns: repeat(auto-fit, minmax(22px, 1fr)); gap: 10px; align-items: end; opacity: .3; }
-.ops-chart i, .ops-bars i { display: block; border-radius: 6px 6px 0 0; background: linear-gradient(180deg, #8b7cf6, #fb4d5f); }
-.ops-donut { width: 170px; height: 170px; margin: 8px auto 14px; border-radius: 999px; display: grid; place-items: center; align-content: center; background: conic-gradient(#7ed957 calc(var(--value) * 1%), #fb4d5f 0 100%); box-shadow: inset 0 0 0 22px #0b1728; }
+.ops-chart i, .ops-bars i { display: block; border-radius: 6px 6px 0 0; background: linear-gradient(180deg, #8b7cf6, #fb4d5f); transform-origin: bottom; animation: opsBarIn 360ms ease both; }
+.ops-donut { width: 170px; height: 170px; margin: 8px auto 14px; border-radius: 999px; display: grid; place-items: center; align-content: center; background: conic-gradient(#7ed957 calc(var(--value) * 1%), #fb4d5f 0 100%); box-shadow: inset 0 0 0 22px #0b1728; animation: opsRingFill 420ms ease both; }
 .ops-donut strong { color: #fff; font-size: 30px; }
 .ops-donut span { color: #8ea0b8; font-size: 12px; font-weight: 850; }
 .ops-bars { min-height: 260px; position: relative; display: flex; align-items: end; gap: 12px; padding: 18px; border: 1px solid rgba(148,163,184,.13); border-radius: 8px; background: rgba(4,10,20,.36); overflow-x: auto; }
@@ -1559,6 +1892,22 @@ const operationsCenterStyles = `
 .ops-tools input { border: 0; background: transparent; padding-left: 0; }
 .ops-form { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)) auto; gap: 10px; }
 .ops-form textarea { grid-column: span 2; min-height: 42px; resize: vertical; }
+.exam-form-labelled label { display: grid; gap: 6px; color: #8ea0b8; font-size: 12px; font-weight: 850; }
+.exam-form-labelled label.span-field { grid-column: span 2; }
+.exam-form-labelled label input,
+.exam-form-labelled label select,
+.exam-form-labelled label textarea { width: 100%; }
+.assignment-form-labelled label { display: grid; gap: 6px; color: #8ea0b8; font-size: 12px; font-weight: 850; }
+.assignment-form-labelled label.span-field { grid-column: span 2; }
+.assignment-form-labelled label input,
+.assignment-form-labelled label select,
+.assignment-form-labelled label textarea { width: 100%; }
+.fee-form-labelled label { display: grid; gap: 6px; color: #8ea0b8; font-size: 12px; font-weight: 850; }
+.fee-form-labelled label.span-field { grid-column: span 2; }
+.fee-form-labelled label input,
+.fee-form-labelled label select { width: 100%; }
+.fee-history { display: grid; gap: 4px; min-width: 240px; }
+.fee-history span { color: #dbeafe; font-size: 12px; white-space: normal; }
 .ops-actions { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
 .ops-actions input, .ops-actions select { width: 126px; min-height: 34px; padding: 8px; }
 .ops-icon { width: 34px; min-width: 34px; height: 34px; display: inline-grid; place-items: center; border-radius: 6px; border: 1px solid rgba(96,165,250,.28); color: #9cc5ff; background: rgba(37,99,235,.12); cursor: pointer; }
@@ -1574,6 +1923,10 @@ const operationsCenterStyles = `
 .ops-timeline div.active { border-left-color: #d61f3a; box-shadow: inset 0 0 0 1px rgba(214,31,58,.16); }
 .ops-assignment-list { display: grid; gap: 10px; }
 .ops-assignment-list > article { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 12px; padding: 12px; border: 1px solid rgba(148,163,184,.16); border-radius: 8px; background: rgba(4,10,20,.42); }
+.ops-assignment-list > article, .ops-timeline div, .ops-subject-list span, .ops-installments article, .ops-table-wrap tbody tr { animation: opsItemIn 260ms ease both; }
+.ops-assignment-list > article:nth-child(2), .ops-timeline div:nth-child(2), .ops-subject-list span:nth-child(2), .ops-installments article:nth-child(2), .ops-table-wrap tbody tr:nth-child(2) { animation-delay: 35ms; }
+.ops-assignment-list > article:nth-child(3), .ops-timeline div:nth-child(3), .ops-subject-list span:nth-child(3), .ops-installments article:nth-child(3), .ops-table-wrap tbody tr:nth-child(3) { animation-delay: 70ms; }
+.ops-assignment-list > article:nth-child(4), .ops-timeline div:nth-child(4), .ops-subject-list span:nth-child(4), .ops-installments article:nth-child(4), .ops-table-wrap tbody tr:nth-child(4) { animation-delay: 105ms; }
 .ops-assignment-list.compact > article { grid-template-columns: auto minmax(0, 1fr) auto; }
 .ops-file-icon { width: 38px; height: 38px; display: grid; place-items: center; border-radius: 8px; color: #dbeafe; background: linear-gradient(135deg, #1d4ed8, #5146d8); }
 .ops-assignment-list strong { display: block; color: #fff; }
@@ -1584,12 +1937,23 @@ const operationsCenterStyles = `
 .ops-inline-edit { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
 .ops-inline-edit textarea, .ops-submit-form { grid-column: 1 / -1; }
 .ops-submit-form { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+.assignment-filters { width: 100%; display: grid; grid-template-columns: auto minmax(170px, 1fr) minmax(132px, .42fr) minmax(150px, .5fr); }
+.assignment-filters select { min-height: 34px; padding: 7px 8px; border: 1px solid rgba(148,163,184,.18); border-radius: 6px; background: rgba(4,10,20,.72); color: #f8fafc; }
+.assignment-submit-form { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; }
 .ops-submission-strip, .ops-delete-strip { grid-column: 1 / -1; display: flex; flex-wrap: wrap; gap: 8px; }
 .ops-submission-strip span { padding: 6px 8px; border-radius: 6px; background: rgba(59,130,246,.12); color: #bfdbfe; }
 .ops-period { display: grid; gap: 4px; min-width: 126px; padding: 9px; border-radius: 8px; background: linear-gradient(135deg, rgba(29,78,216,.24), rgba(127,16,32,.2)); border: 1px solid rgba(148,163,184,.14); }
 .ops-period strong { color: #fff; }
 .ops-period span, .ops-period small { color: #a9bad2; }
 .exam-question-form { margin-bottom: 12px; padding: 12px; border: 1px solid rgba(148,163,184,.14); border-radius: 8px; background: rgba(4,10,20,.38); }
+.bulk-import-form { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.bulk-import-form input[type="file"] { color: #dbeafe; font-size: 12.5px; max-width: 280px; }
+.bulk-import-result { display: grid; gap: 8px; margin-top: 10px; padding: 12px; border-radius: 8px; border: 1px solid rgba(148,163,184,.16); background: rgba(4,10,20,.42); }
+.bulk-import-summary { display: flex; gap: 14px; flex-wrap: wrap; }
+.bulk-import-summary span { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 850; }
+.bulk-import-summary .ok { color: #86efac; }
+.bulk-import-summary .warn { color: #fca5a5; }
+.bulk-import-errors { margin: 0; padding-left: 18px; color: #fca5a5; font-size: 12px; display: grid; gap: 4px; max-height: 160px; overflow: auto; }
 .ops-panel-title-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
 .ops-panel-title-row h2 { display: flex; align-items: center; gap: 9px; margin: 0; color: #fff; font-size: 16px; letter-spacing: 0; }
 .ops-panel-title-row h2 svg { color: #fb7185; }
@@ -1640,11 +2004,29 @@ const operationsCenterStyles = `
   cursor: pointer;
 }
 .exam-options button.active { border-color: rgba(251,113,133,.48); background: rgba(214,31,58,.24); color: #fff; }
+.exam-question-nav { display: flex; flex-wrap: wrap; gap: 8px; }
+.exam-question-nav button {
+  width: 36px;
+  height: 36px;
+  border-radius: 6px;
+  border: 1px solid rgba(148,163,184,.18);
+  color: #dbeafe;
+  background: rgba(4,10,20,.58);
+  font-weight: 900;
+  cursor: pointer;
+}
+.exam-question-nav button.answered { color: #bbf7d0; border-color: rgba(34,197,94,.28); background: rgba(34,197,94,.14); }
+.exam-question-nav button.current { color: #fff; border-color: rgba(251,113,133,.48); background: rgba(214,31,58,.24); }
 .exam-evaluation strong { color: #fff; }
 .exam-evaluation span, .exam-evaluation small { color: #8ea0b8; }
 .inline-message { background: #0d1a2c; color: #fff; border-color: rgba(251,113,133,.36); }
 .operations-center .empty-state { color: #8ea0b8; }
 .operations-center .empty-state strong { color: #fff; }
+@keyframes opsCardIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes opsItemIn { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes opsBarIn { from { opacity: .45; transform: scaleY(.24); } to { opacity: 1; transform: scaleY(1); } }
+@keyframes opsLineDraw { from { stroke-dashoffset: 100; opacity: .45; } to { stroke-dashoffset: 0; opacity: 1; } }
+@keyframes opsRingFill { from { --value: 0; } }
 @media (max-width: 1240px) {
   .ops-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .ops-hub-layout, .ops-detail-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -1656,6 +2038,11 @@ const operationsCenterStyles = `
   .ops-page-head, .ops-assignment-list > article { align-items: stretch; grid-template-columns: 1fr; }
   .ops-page-head { display: grid; }
   .ops-summary-grid, .ops-hub-layout, .ops-detail-grid, .ops-metric-deck, .ops-form, .ops-inline-edit, .ops-submit-form { grid-template-columns: 1fr; }
+  .exam-form-labelled label.span-field { grid-column: auto; }
+  .assignment-form-labelled label.span-field { grid-column: auto; }
+  .fee-form-labelled label.span-field { grid-column: auto; }
+  .assignment-filters { grid-template-columns: auto minmax(0, 1fr); }
+  .assignment-filters select { grid-column: 1 / -1; }
   .exam-options, .exam-taking-panel > header { grid-template-columns: 1fr; display: grid; }
   .ops-form textarea { grid-column: auto; }
   .ops-metric-row { grid-template-columns: 1fr; }

@@ -496,31 +496,61 @@ function DailyPractice({ session, onSaved, setMessage }) {
 }
 
 function Mistakes({ rows, onSaved, setMessage }) {
-  async function practice(row) {
+  const [answers, setAnswers] = useState({});
+  const [retrying, setRetrying] = useState("");
+  const toast = useToast();
+
+  async function retry(row) {
+    const answer = (answers[row.id] || "").trim();
+    if (!answer) {
+      setMessage("Enter an answer before retrying this question.");
+      return;
+    }
     try {
-      await api(`/practice/mistakes/${row.id}/practice-again/`, { method: "POST" });
-      setMessage("Focused practice is ready in Daily Practice.");
+      setRetrying(row.id);
+      const result = await api(`/practice/mistakes/${row.id}/practice-again/`, { method: "POST", body: JSON.stringify({ answer }) });
+      setMessage(result.correct ? "Correct. Mistake marked as Corrected." : "Still needs practice. Try reviewing the explanation.");
+      toast?.show(result.correct ? "Mistake corrected" : "Retry saved", result.correct ? "success" : "info");
+      setAnswers((current) => ({ ...current, [row.id]: "" }));
       onSaved();
-    } catch {
-      setMessage("Unable to start mistake practice.");
+    } catch (err) {
+      setMessage(err.message || "Unable to retry this question.");
+      toast?.show(err.message || "Unable to retry this question.", "error");
+    } finally {
+      setRetrying("");
     }
   }
+
   return (
     <Panel title="My Mistakes" icon={Target} className="span-3">
       <div className="practice-list">
         {rows.map((row) => (
-          <article key={row.id}>
+          <article className="mistake-card" key={row.id}>
             <div className="practice-icon"><Target size={18} /></div>
             <div>
               <strong>{row.question?.text || "Question"}</strong>
-              <span>{row.subject} / {row.chapter}</span>
-              <small>{row.wrong_attempts} wrong attempts / last {formatDate(row.last_wrong_at)}</small>
+              <span>{row.subject || "-"} / {row.chapter || "-"}</span>
+              <small>Student answer: {row.student_answer || "-"}</small>
+              <small>Correct answer: {row.correct_answer || row.question?.correct_answer || row.question?.expected_answer || "-"}</small>
+              {row.explanation && <small>Explanation: {row.explanation}</small>}
+              <small>Date attempted: {formatDate(row.last_wrong_at)} / Source: {labelSource(row.source)}</small>
+              {row.last_retry_at && <small>Last retry: {row.last_retry_correct ? "Correct" : "Incorrect"} / {formatDate(row.last_retry_at)}</small>}
             </div>
-            <StatusBadge value={row.resolved ? "Resolved" : "Needs Practice"} />
-            <button className="practice-red-button" onClick={() => practice(row)}>Practice Again</button>
+            <StatusBadge value={row.status || (row.resolved ? "Corrected" : "Needs Practice")} />
+            <div className="retry-box">
+              {["mcq", "true_false"].includes(row.question?.question_type) && (row.question?.options || []).length > 0 ? (
+                <select value={answers[row.id] || ""} onChange={(event) => setAnswers({ ...answers, [row.id]: event.target.value })}>
+                  <option value="">Choose answer</option>
+                  {(row.question.options || []).map((option) => <option key={option} value={option}>{option}</option>)}
+                </select>
+              ) : (
+                <input value={answers[row.id] || ""} onChange={(event) => setAnswers({ ...answers, [row.id]: event.target.value })} placeholder="Retry answer" />
+              )}
+              <button className="practice-red-button" disabled={retrying === row.id || row.resolved} onClick={() => retry(row)}>Retry Question</button>
+            </div>
           </article>
         ))}
-        {rows.length === 0 && <EmptyState title="Great work! No mistakes are currently waiting for revision." />}
+        {rows.length === 0 && <EmptyState title="Great work! No mistakes recorded yet." />}
       </div>
     </Panel>
   );
@@ -535,30 +565,58 @@ function WeakTopics({ rows }) {
 }
 
 function StudyPlanner({ plan, onSaved, setMessage }) {
-  async function complete(task) {
+  const tasks = plan?.tasks || [];
+  const todayTasks = tasks.filter((task) => (task.scope || "today") === "today");
+  const weekTasks = tasks.filter((task) => (task.scope || "today") === "week");
+
+  async function setTaskStatus(task, statusValue) {
     try {
-      await api(`/practice/study-plan/tasks/${task.task_id}/complete/`, { method: "POST", body: JSON.stringify({ completed: !task.completed }) });
+      await api(`/practice/study-plan/tasks/${task.task_id}/complete/`, { method: "POST", body: JSON.stringify({ status: statusValue, completed: statusValue === "Completed" }) });
       onSaved();
     } catch {
       setMessage("Unable to update this study task.");
     }
   }
+
+  function renderTask(task) {
+    const statusValue = task.status || (task.completed ? "Completed" : "Pending");
+    return (
+      <article className="planner-task" key={task.task_id}>
+        <div className="practice-icon"><ListChecks size={18} /></div>
+        <div>
+          <strong>{task.subject ? `${task.subject}: ${task.title}` : task.title}</strong>
+          <span>{task.category} {task.chapter ? `/ ${task.chapter}` : ""}</span>
+          {task.reason && <small>Reason: {task.reason}</small>}
+          <small>Suggested: {task.minutes} min</small>
+        </div>
+        <StatusBadge value={statusValue} />
+        <div className="planner-actions">
+          {task.link && <Link className="practice-soft-button" to={task.link}>Open</Link>}
+          <button className="practice-red-button" disabled={statusValue === "Completed"} onClick={() => setTaskStatus(task, "Completed")}>Complete</button>
+          <button className="practice-soft-button" disabled={statusValue === "Skipped"} onClick={() => setTaskStatus(task, "Skipped")}>Skip</button>
+          {statusValue !== "Pending" && <button className="practice-soft-button" onClick={() => setTaskStatus(task, "Pending")}>Reset</button>}
+        </div>
+      </article>
+    );
+  }
+
   return (
     <Panel title="Study Planner" icon={ListChecks} className="span-3">
-      <div className="practice-list">
-        {(plan?.tasks || []).map((task) => (
-          <article key={task.task_id}>
-            <div className="practice-icon"><ListChecks size={18} /></div>
-            <div>
-              <strong>{task.title}</strong>
-              <span>{task.category} / {task.subject || "Study"} {task.chapter ? `/ ${task.chapter}` : ""}</span>
-              <small>{task.minutes} min</small>
-            </div>
-            {task.link ? <Link className="practice-soft-button" to={task.link}>Open</Link> : <StatusBadge value="Planned" />}
-            <button className={task.completed ? "practice-soft-button" : "practice-red-button"} onClick={() => complete(task)}>{task.completed ? "Completed" : "Mark Done"}</button>
-          </article>
-        ))}
-        {(!plan?.tasks || plan.tasks.length === 0) && <EmptyState title="No study tasks scheduled for today." />}
+      <div className="planner-sections">
+        <section>
+          <h3>Today's Study Plan</h3>
+          <div className="practice-list">
+            {todayTasks.map(renderTask)}
+            {todayTasks.length === 0 && <EmptyState title="No study tasks scheduled for today." />}
+          </div>
+        </section>
+        <section>
+          <h3>This Week</h3>
+          <div className="practice-list">
+            {weekTasks.map(renderTask)}
+            {weekTasks.length === 0 && <EmptyState title="No weekly study tasks scheduled." />}
+          </div>
+        </section>
       </div>
     </Panel>
   );
@@ -658,6 +716,11 @@ function formatDate(value) {
   return new Date(value).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
 }
 
+function labelSource(value) {
+  if (value === "exam") return "Exam";
+  return "Practice";
+}
+
 const practiceStyles = `
 .practice-center {
   min-height: calc(100vh - 112px);
@@ -710,7 +773,7 @@ const practiceStyles = `
 .practice-metric-deck strong { color: #fff; font-size: clamp(22px, 2vw, 30px); overflow-wrap: anywhere; }
 .practice-form { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; }
 .practice-form textarea { grid-column: span 2; min-height: 42px; resize: vertical; }
-.practice-form input, .practice-form select, .practice-form textarea, .practice-filter input, .practice-filter select, .practice-question textarea {
+.practice-form input, .practice-form select, .practice-form textarea, .practice-filter input, .practice-filter select, .practice-question textarea, .retry-box input, .retry-box select {
   border: 1px solid rgba(148,163,184,.18);
   border-radius: 6px;
   background: rgba(4,10,20,.72);
@@ -755,8 +818,15 @@ const practiceStyles = `
 .practice-icon-button { width: 34px; min-width: 34px; height: 34px; display: inline-grid; place-items: center; border-radius: 6px; border: 1px solid rgba(96,165,250,.28); color: #9cc5ff; background: rgba(37,99,235,.12); cursor: pointer; }
 .practice-icon-button.danger { color: #fb7185; border-color: rgba(251,113,133,.28); background: rgba(214,31,58,.12); }
 .practice-status { display: inline-flex; min-height: 25px; align-items: center; padding: 0 9px; border-radius: 999px; color: #bfdbfe; background: rgba(59,130,246,.16); border: 1px solid rgba(96,165,250,.26); font-size: 12px; font-weight: 900; text-transform: capitalize; white-space: nowrap; }
-.practice-status.weak, .practice-status.needs-practice { color: #fecdd3; background: rgba(214,31,58,.16); border-color: rgba(251,113,133,.24); }
-.practice-status.strong, .practice-status.resolved, .practice-status.correct { color: #bbf7d0; background: rgba(34,197,94,.15); border-color: rgba(34,197,94,.22); }
+.practice-status.weak, .practice-status.needs-practice, .practice-status.pending { color: #fecdd3; background: rgba(214,31,58,.16); border-color: rgba(251,113,133,.24); }
+.practice-status.strong, .practice-status.resolved, .practice-status.correct, .practice-status.corrected, .practice-status.completed { color: #bbf7d0; background: rgba(34,197,94,.15); border-color: rgba(34,197,94,.22); }
+.practice-status.skipped { color: #fde68a; background: rgba(245,158,11,.16); border-color: rgba(245,158,11,.26); }
+.mistake-card, .planner-task { align-items: start; }
+.retry-box, .planner-actions { display: flex; align-items: center; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
+.retry-box { min-width: min(280px, 100%); }
+.retry-box input, .retry-box select { min-width: 180px; }
+.planner-sections { display: grid; gap: 14px; }
+.planner-sections h3 { margin: 0 0 10px; color: #fff; font-size: 15px; letter-spacing: 0; }
 .practice-question { display: grid; gap: 12px; padding: 12px; border: 1px solid rgba(148,163,184,.14); border-radius: 8px; background: rgba(4,10,20,.42); }
 .practice-question header { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .practice-question h2 { margin: 0; color: #fff; font-size: 18px; line-height: 1.35; letter-spacing: 0; }
@@ -810,6 +880,8 @@ const practiceStyles = `
   .practice-center { margin: 0; padding: 12px; }
   .practice-head, .practice-list > article, .practice-question header { display: grid; align-items: stretch; grid-template-columns: 1fr; }
   .practice-grid, .practice-metric-deck, .practice-form, .practice-filter, .practice-options { grid-template-columns: 1fr; }
+  .retry-box, .planner-actions { justify-content: stretch; }
+  .retry-box input, .retry-box select, .retry-box button, .planner-actions a, .planner-actions button { width: 100%; }
   .practice-form textarea { grid-column: auto; }
   .practice-table-wrap table { min-width: max-content; }
   .wizard-steps { flex-direction: column; }

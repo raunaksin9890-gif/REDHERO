@@ -37,6 +37,54 @@ export function useToast() {
   return useContext(ToastContext);
 }
 
+export function useReducedMotion() {
+  const [reduced, setReduced] = useState(false);
+
+  useEffect(() => {
+    const query = window.matchMedia("(prefers-reduced-motion: reduce)");
+    function update() {
+      setReduced(query.matches);
+    }
+    update();
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
+
+  return reduced;
+}
+
+export function AnimatedValue({ value, duration = 420 }) {
+  const reducedMotion = useReducedMotion();
+  const text = String(value ?? "");
+  const numeric = typeof value === "number" ? value : Number(text.replace(/[^0-9.-]/g, ""));
+  const prefix = text.match(/^[^\d.-]+/)?.[0] || "";
+  const suffix = text.match(/[^\d.]+$/)?.[0] || "";
+  const decimals = Number.isFinite(numeric) && String(numeric).includes(".") ? 1 : 0;
+  const grouped = text.includes(",");
+  const [display, setDisplay] = useState(Number.isFinite(numeric) && !reducedMotion ? 0 : value);
+
+  useEffect(() => {
+    if (!Number.isFinite(numeric) || reducedMotion) {
+      setDisplay(value);
+      return undefined;
+    }
+    const start = performance.now();
+    let frame;
+    function tick(now) {
+      const progress = Math.min((now - start) / duration, 1);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      const next = Number((numeric * eased).toFixed(decimals));
+      setDisplay(grouped ? next.toLocaleString("en-IN") : next);
+      if (progress < 1) frame = requestAnimationFrame(tick);
+    }
+    frame = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(frame);
+  }, [decimals, duration, grouped, numeric, reducedMotion, value]);
+
+  if (!Number.isFinite(numeric)) return <>{value}</>;
+  return <>{prefix}{display}{suffix}</>;
+}
+
 export function LoadingOverlaySuppressor({ active, children }) {
   return <LoadingOverlaySuppressedContext.Provider value={active}>{children}</LoadingOverlaySuppressedContext.Provider>;
 }
