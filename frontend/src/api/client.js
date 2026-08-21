@@ -44,6 +44,7 @@ function assertFrontendPermission(path, method) {
     { pattern: /^\/attendance\//, methods: ["POST", "PUT"], roles: ["super_admin", "teacher"] },
     { pattern: /^\/marks\//, methods: ["DELETE"], roles: ["super_admin"] },
     { pattern: /^\/marks\//, methods: ["POST", "PUT"], roles: ["super_admin", "teacher"] },
+    { pattern: /^\/notes\/[^/]+\/bookmark\//, methods: ["POST", "DELETE"], roles: ["student"] },
     { pattern: /^\/notes\//, roles: ["super_admin", "teacher"] },
     { pattern: /^\/videos\//, roles: ["super_admin", "teacher"] },
     { pattern: /^\/notices\//, roles: ["super_admin", "teacher"] },
