@@ -28,6 +28,7 @@ urlpatterns = [
     path("fees/", views.fees),
     path("contact-messages/", views.contact_messages),
     path("videos/", views.videos),
+    path("notes/<str:note_id>/bookmark/", views.note_bookmark),
     path("notes/", views.notes),
     path("blogs/", views.blogs),
     path("current-affairs/", views.current_affairs),

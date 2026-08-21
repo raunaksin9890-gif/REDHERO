@@ -29,6 +29,7 @@ from .models import (
     Fee,
     Marks,
     Note,
+    NoteBookmark,
     Notice,
     Notification,
     Student,
@@ -882,7 +883,14 @@ def content_view(model, fields):
     def handler(request):
         user, query = class_scoped_query(request, model)
         if request.method == "GET":
-            return ok({"results": [simple_json(row, fields) for row in query.order_by("-created_at")]})
+            rows = list(query.order_by("-created_at"))
+            results = [simple_json(row, fields) for row in rows]
+            if model == Note and user.role == ROLE_STUDENT:
+                student = get_student_for_user(user)
+                bookmarked_ids = {str(row.note.id) for row in NoteBookmark.objects(student=student, note__in=rows)} if student else set()
+                for item in results:
+                    item["bookmarked"] = item["id"] in bookmarked_ids
+            return ok({"results": results})
         require_roles(request, [ROLE_ADMIN, ROLE_TEACHER])
         if request.method in ["PUT", "DELETE"]:
             row = model.objects(id=request.data.get("id") or request.GET.get("id")).first()
@@ -938,6 +946,31 @@ def content_view(model, fields):
 
 videos = content_view(Video, ["title", "class_level", "subject", "chapter", "description", "youtube_url", "created_at"])
 notes = content_view(Note, ["title", "class_level", "subject", "chapter", "pdf_url", "created_at"])
+
+
+@api_view(["GET", "POST", "DELETE"])
+def note_bookmark(request, note_id):
+    user = require_roles(request, [ROLE_STUDENT])
+    student = get_student_for_user(user)
+    if not student:
+        return bad("Student profile not found", status.HTTP_404_NOT_FOUND)
+    note = Note.objects(id=note_id, class_level=student.class_level).first()
+    if not note:
+        return bad("Note not found", status.HTTP_404_NOT_FOUND)
+
+    existing = NoteBookmark.objects(student=student, note=note).first()
+    if request.method == "GET":
+        return ok({"bookmarked": bool(existing)})
+    if request.method == "DELETE":
+        if existing:
+            existing.delete()
+        return ok({"bookmarked": False, "message": "Bookmark removed"})
+    if not existing:
+        try:
+            NoteBookmark(student=student, note=note).save()
+        except NotUniqueError:
+            pass
+    return ok({"bookmarked": True, "message": "Bookmarked"})
 
 
 @api_view(["GET", "POST", "PUT", "DELETE"])

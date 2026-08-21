@@ -22,6 +22,7 @@ from .models import (
     Fee,
     Marks,
     Note,
+    NoteBookmark,
     Notice,
     PracticeAnswer,
     PracticeSession,
@@ -647,7 +648,14 @@ def content_view(model, fields, owner_field):
     def handler(request):
         user, query = class_query(request, model)
         if request.method == "GET":
-            return ok({"results": [simple_json(row, fields) for row in query.order_by("-created_at")]})
+            rows = list(query.order_by("-created_at"))
+            results = [simple_json(row, fields) for row in rows]
+            if model == Note and user.role == ROLE_STUDENT:
+                student = get_student_for_user(user)
+                bookmarked_ids = {str(row.note.id) for row in NoteBookmark.objects(student=student, note__in=rows)} if student else set()
+                for item in results:
+                    item["bookmarked"] = item["id"] in bookmarked_ids
+            return ok({"results": results})
         require_roles(request, [ROLE_ADMIN, ROLE_TEACHER])
         data = request.data
         if request.method in ["PUT", "DELETE"]:
