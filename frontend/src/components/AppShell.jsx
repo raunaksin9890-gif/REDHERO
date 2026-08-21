@@ -260,6 +260,7 @@ const notificationIcons = {
   video: FileText,
   note: FileText,
   bell: Bell,
+  key: KeyRound,
 };
 
 function mapNotification(item) {

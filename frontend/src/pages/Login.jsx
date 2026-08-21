@@ -20,6 +20,7 @@ export function Login() {
   const [recoveryMessage, setRecoveryMessage] = useState("");
   const [resetToken, setResetToken] = useState("");
   const [recovery, setRecovery] = useState({ username: "", roll_number: "", class_level: "10", student_id: "", new_password: "", confirm_password: "" });
+  const [adminMessage, setAdminMessage] = useState({ email: "", message: "" });
   const navigate = useNavigate();
   const { login } = useAuth();
   const toast = useToast();
@@ -105,6 +106,24 @@ export function Login() {
     setRecoveryMessage("");
     setResetToken("");
     setRecovery({ username: "", roll_number: "", class_level: "10", student_id: "", new_password: "", confirm_password: "" });
+    setAdminMessage({ email: "", message: "" });
+  }
+
+  async function sendAdminMessage(event) {
+    event.preventDefault();
+    setRecoveryBusy(true);
+    setRecoveryMessage("");
+    try {
+      const result = await api("/auth/forgot-password/message-admin/", { method: "POST", body: JSON.stringify(adminMessage) });
+      setRecoveryMessage(result.message || "Your request has been sent to the admin.");
+      toast?.show("Request sent to admin");
+      setRecoveryStep("message-sent");
+    } catch (err) {
+      setRecoveryMessage(err.message || "Unable to send your request right now.");
+      toast?.show(err.message || "Unable to send your request right now.", "error");
+    } finally {
+      setRecoveryBusy(false);
+    }
   }
 
   return (
@@ -157,13 +176,60 @@ export function Login() {
             </span>
           </label>
           {error && <div className="error">{error}</div>}
-          <button className="ghost-icon reveal" type="button" style={{ width: "fit-content", minWidth: 0, padding: "0 2px", justifySelf: "end" }} onClick={() => { setRecoveryStep("verify"); setRecoveryMessage(""); }}>
+          <button className="ghost-icon reveal" type="button" style={{ width: "fit-content", minWidth: 0, padding: "0 2px", justifySelf: "end" }} onClick={() => { setRecoveryStep("choice"); setRecoveryMessage(""); }}>
             Forgot Password?
           </button>
           <button className="primary" disabled={busy}>
             {busy && <Loader2 className="spin" size={18} />}
             {busy ? "Signing in..." : "Sign in"}
           </button>
+        </form>}
+        {recoveryStep === "choice" && <div className="recovery-choice">
+          <p style={{ margin: "0 0 14px", color: "#8ea0b8", fontSize: 13 }}>How would you like to recover your account?</p>
+          <button className="primary" type="button" onClick={() => { setRecoveryStep("verify"); setRecoveryMessage(""); }}>
+            I know my Student ID &amp; Roll Number
+          </button>
+          <button className="secondary" type="button" onClick={() => { setRecoveryStep("message"); setRecoveryMessage(""); }} style={{ marginTop: 10 }}>
+            Message Admin for a password reset
+          </button>
+          <button className="ghost-icon reveal" type="button" style={{ marginTop: 14, width: "fit-content", minWidth: 0, padding: "0 2px" }} onClick={backToSignIn}>
+            Back to Sign In
+          </button>
+        </div>}
+        {recoveryStep === "message" && <form onSubmit={sendAdminMessage} autoComplete="off" noValidate>
+          <p style={{ margin: "0 0 4px", color: "#8ea0b8", fontSize: 13 }}>
+            Tell the admin what's happening. They'll reset your password and you can sign in with the new one, then set your own password.
+          </p>
+          <label>Your Email
+            <span className="input-wrap">
+              <Mail size={18} />
+              <input value={adminMessage.email} onChange={(event) => setAdminMessage({ ...adminMessage, email: event.target.value })} type="email" required />
+            </span>
+          </label>
+          <label>Message
+            <span className="input-wrap">
+              <textarea
+                value={adminMessage.message}
+                onChange={(event) => setAdminMessage({ ...adminMessage, message: event.target.value })}
+                placeholder="e.g. I forgot my password and can't log in. Please reset it."
+                rows={4}
+                required
+                style={{ width: "100%", background: "transparent", border: "none", color: "inherit", resize: "vertical", padding: "8px 0" }}
+              />
+            </span>
+          </label>
+          {recoveryMessage && <div className="error">{recoveryMessage}</div>}
+          <button className="primary" disabled={recoveryBusy}>{recoveryBusy && <Loader2 className="spin" size={18} />} Send Request to Admin</button>
+          <button className="secondary" type="button" onClick={() => setRecoveryStep("choice")}>Back</button>
+        </form>}
+        {recoveryStep === "message-sent" && <form autoComplete="off">
+          <div className="error" style={{ background: "rgba(34,197,94,.12)", borderColor: "rgba(34,197,94,.3)", color: "#bbf7d0" }}>
+            {recoveryMessage || "Your request has been sent to the admin."}
+          </div>
+          <p style={{ margin: "6px 0 0", color: "#8ea0b8", fontSize: 13 }}>
+            Once the admin resets your password, sign in with the new password — you'll be asked to set your own password right after.
+          </p>
+          <button className="primary" type="button" onClick={backToSignIn}>Back to Sign In</button>
         </form>}
         {recoveryStep === "verify" && <form onSubmit={verifyRecovery} autoComplete="off" noValidate>
           <label>Username

@@ -2,6 +2,7 @@ import csv
 import io
 import logging
 import os
+import re
 from datetime import datetime, timedelta, timezone
 
 import jwt
@@ -29,6 +30,7 @@ from .models import (
     Fee,
     Marks,
     Note,
+    NoteBookmark,
     Notice,
     Notification,
     Student,
@@ -38,7 +40,7 @@ from .models import (
     User,
     Video,
 )
-from .notifications import notify_all_students, notify_student, notify_students_for_class
+from .notifications import notify_admins, notify_all_students, notify_student, notify_students_for_class
 from .security import create_token, current_user, hash_password, require_roles, verify_password
 from .serializers import (
     attendance_json,
@@ -333,6 +335,33 @@ def forgot_password_reset(request):
         updated_at=datetime.utcnow(),
     )
     return ok({"message": "Password changed successfully. You can now sign in with your new password."})
+
+
+@api_view(["POST"])
+def forgot_password_message_admin(request):
+    data = request.data
+    email = data.get("email", "").lower().strip()
+    message_text = data.get("message", "").strip()
+    suffix = f"message-admin:{email}"
+    if too_many_forgot_attempts(request, suffix):
+        return bad("Too many requests. Please try again later.", status.HTTP_429_TOO_MANY_REQUESTS)
+    record_forgot_attempt(request, suffix)
+    if not email or not re.match(r"^[^\s@]+@[^\s@]+\.[^\s@]+$", email):
+        return bad("Please enter a valid email address.")
+    if not message_text:
+        return bad("Please describe your issue in a short message.")
+    target = User.objects(email=email, is_active=True).first()
+    if target and target.role != ROLE_ADMIN:
+        notify_admins(
+            "password_reset_request",
+            "Password reset requested",
+            f"{target.name} ({target.email}) can't sign in and asked for a password reset. Message: \"{message_text[:300]}\"",
+            target_url="/directory",
+            tone="red",
+            icon="key",
+            related_object_id=str(target.id),
+        )
+    return ok({"message": "Your request has been sent to the admin. You'll be able to sign in once your password is reset."})
 
 
 @api_view(["POST"])
@@ -882,7 +911,14 @@ def content_view(model, fields):
     def handler(request):
         user, query = class_scoped_query(request, model)
         if request.method == "GET":
-            return ok({"results": [simple_json(row, fields) for row in query.order_by("-created_at")]})
+            rows = list(query.order_by("-created_at"))
+            results = [simple_json(row, fields) for row in rows]
+            if model == Note and user.role == ROLE_STUDENT:
+                student = get_student_for_user(user)
+                bookmarked_ids = {str(row.note.id) for row in NoteBookmark.objects(student=student, note__in=rows)} if student else set()
+                for item in results:
+                    item["bookmarked"] = item["id"] in bookmarked_ids
+            return ok({"results": results})
         require_roles(request, [ROLE_ADMIN, ROLE_TEACHER])
         if request.method in ["PUT", "DELETE"]:
             row = model.objects(id=request.data.get("id") or request.GET.get("id")).first()
@@ -938,6 +974,31 @@ def content_view(model, fields):
 
 videos = content_view(Video, ["title", "class_level", "subject", "chapter", "description", "youtube_url", "created_at"])
 notes = content_view(Note, ["title", "class_level", "subject", "chapter", "pdf_url", "created_at"])
+
+
+@api_view(["GET", "POST", "DELETE"])
+def note_bookmark(request, note_id):
+    user = require_roles(request, [ROLE_STUDENT])
+    student = get_student_for_user(user)
+    if not student:
+        return bad("Student profile not found", status.HTTP_404_NOT_FOUND)
+    note = Note.objects(id=note_id, class_level=student.class_level).first()
+    if not note:
+        return bad("Note not found", status.HTTP_404_NOT_FOUND)
+
+    existing = NoteBookmark.objects(student=student, note=note).first()
+    if request.method == "GET":
+        return ok({"bookmarked": bool(existing)})
+    if request.method == "DELETE":
+        if existing:
+            existing.delete()
+        return ok({"bookmarked": False, "message": "Bookmark removed"})
+    if not existing:
+        try:
+            NoteBookmark(student=student, note=note).save()
+        except NotUniqueError:
+            pass
+    return ok({"bookmarked": True, "message": "Bookmarked"})
 
 
 @api_view(["GET", "POST", "PUT", "DELETE"])

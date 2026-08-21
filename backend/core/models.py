@@ -204,6 +204,17 @@ class Note(Document):
     meta = {"collection": "Notes", "indexes": ["class_level", "subject", "chapter"]}
 
 
+class NoteBookmark(Document):
+    student = ReferenceField(Student, required=True, reverse_delete_rule=2)
+    note = ReferenceField(Note, required=True, reverse_delete_rule=2)
+    created_at = DateTimeField(default=datetime.utcnow)
+
+    meta = {
+        "collection": "NoteBookmarks",
+        "indexes": [{"fields": ["student", "note"], "unique": True}, "student", "note", "-created_at"],
+    }
+
+
 class Assignment(Document):
     title = StringField(required=True)
     description = StringField(required=True)

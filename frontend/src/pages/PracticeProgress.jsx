@@ -1,9 +1,12 @@
 import {
+  AlertTriangle,
   BarChart3,
   BookOpen,
   CheckCircle2,
   ClipboardList,
+  Download,
   FileQuestion,
+  FileUp,
   ListChecks,
   Pencil,
   Plus,
@@ -14,7 +17,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { api } from "../api/client.js";
 import { useAuth } from "../components/AuthProvider.jsx";
@@ -168,6 +171,9 @@ function QuestionBank({ rows, onSaved, setMessage }) {
       <Panel title={editing ? "Edit Question" : "Add Question"} icon={Plus} className="span-3">
         <QuestionForm form={form} setForm={setForm} onSubmit={save} editing={editing} onCancel={() => { setEditing(null); setForm(emptyQuestion()); }} />
       </Panel>
+      <Panel title="Bulk Import (Excel / CSV)" icon={FileUp} className="span-3">
+        <BulkImportPanel onSaved={onSaved} />
+      </Panel>
       <Panel title="Question Bank" icon={FileQuestion} className="span-3" action={<span>{filteredRows.length} questions</span>}>
         <FilterBar filters={filters} setFilters={setFilters} />
         <div className="practice-list">
@@ -193,27 +199,231 @@ function QuestionBank({ rows, onSaved, setMessage }) {
   );
 }
 
-function QuestionForm({ form, setForm, onSubmit, editing, onCancel }) {
+const BULK_TEMPLATE_HEADERS = ["Class", "Subject", "Chapter", "Type", "Difficulty", "Marks", "Question", "Option A", "Option B", "Option C", "Option D", "Correct Answer", "Explanation"];
+const BULK_TEMPLATE_ROWS = [
+  ["10", "Science", "Light", "mcq", "Medium", "1", "Which of these bends light the most?", "Glass", "Water", "Air", "Vacuum", "A", "Glass has the highest refractive index among these."],
+  ["10", "Science", "Light", "true_false", "Easy", "1", "Light travels faster in water than in air.", "", "", "", "", "False", "Light slows down when it enters a denser medium like water."],
+];
+
+function downloadBulkTemplate() {
+  const csv = [BULK_TEMPLATE_HEADERS, ...BULK_TEMPLATE_ROWS]
+    .map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(","))
+    .join("\n");
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "question-bank-template.csv";
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+function BulkImportPanel({ onSaved }) {
+  const [file, setFile] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState(null);
+  const inputRef = useRef(null);
+  const toast = useToast();
+
+  async function upload(event) {
+    event.preventDefault();
+    if (!file) return;
+    setBusy(true);
+    setResult(null);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const response = await api("/question-bank/bulk-import/", { method: "POST", body: formData });
+      setResult(response);
+      if (response.created_count > 0) {
+        toast?.show(`${response.created_count} question(s) imported`);
+        onSaved();
+      }
+      if (response.errors?.length) {
+        toast?.show(`${response.errors.length} row(s) had errors`, "error");
+      }
+      setFile(null);
+      if (inputRef.current) inputRef.current.value = "";
+    } catch (err) {
+      toast?.show(err.message || "Unable to import this file.", "error");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   return (
-    <form className="practice-form" onSubmit={onSubmit}>
-      <input placeholder="Class" value={form.class_level} onChange={(event) => setForm({ ...form, class_level: event.target.value })} required />
-      <input placeholder="Subject" value={form.subject} onChange={(event) => setForm({ ...form, subject: event.target.value })} required />
-      <input placeholder="Chapter / Topic" value={form.chapter} onChange={(event) => setForm({ ...form, chapter: event.target.value })} required />
-      <select value={form.question_type} onChange={(event) => setForm({ ...form, question_type: event.target.value, correct_answer: "" })}>
-        {QUESTION_TYPES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
-      </select>
-      <select value={form.difficulty} onChange={(event) => setForm({ ...form, difficulty: event.target.value })}>
-        {DIFFICULTIES.map((item) => <option key={item}>{item}</option>)}
-      </select>
-      <input inputMode="decimal" placeholder="Marks" value={form.marks} onChange={(event) => setForm({ ...form, marks: event.target.value })} required />
-      <textarea placeholder="Question text" value={form.text} onChange={(event) => setForm({ ...form, text: event.target.value })} required />
-      {form.question_type === "mcq" && form.options.map((option, index) => <input key={index} placeholder={`Option ${String.fromCharCode(65 + index)}`} value={option} onChange={(event) => setForm({ ...form, options: form.options.map((item, itemIndex) => itemIndex === index ? event.target.value : item) })} required={index < 2} />)}
-      {form.question_type === "true_false" && <select value={form.correct_answer} onChange={(event) => setForm({ ...form, correct_answer: event.target.value })} required><option value="">Correct Answer</option><option>True</option><option>False</option></select>}
-      {form.question_type === "mcq" && <input placeholder="Correct Answer or option letter" value={form.correct_answer} onChange={(event) => setForm({ ...form, correct_answer: event.target.value })} required />}
-      {["short", "long"].includes(form.question_type) && <textarea placeholder="Expected/model answer" value={form.expected_answer} onChange={(event) => setForm({ ...form, expected_answer: event.target.value })} />}
-      <textarea placeholder="Explanation" value={form.explanation} onChange={(event) => setForm({ ...form, explanation: event.target.value })} />
-      <button className="practice-red-button"><Save size={16} /> {editing ? "Save Question" : "Add Question"}</button>
-      {editing && <button className="practice-soft-button" type="button" onClick={onCancel}><X size={16} /> Cancel</button>}
+    <div className="bulk-import">
+      <p>
+        Upload a CSV file to add many questions at once instead of typing them one by one.
+        Columns: <strong>{BULK_TEMPLATE_HEADERS.join(", ")}</strong>. For MCQs, Correct Answer is the option letter (A/B/C/D).
+        For True/False, Correct Answer is "True" or "False".
+      </p>
+      <div className="bulk-import-row">
+        <button type="button" className="practice-soft-button" onClick={downloadBulkTemplate}>
+          <Download size={16} /> Download sample template
+        </button>
+        <form onSubmit={upload} className="bulk-import-form">
+          <input ref={inputRef} type="file" accept=".csv" onChange={(event) => setFile(event.target.files?.[0] || null)} />
+          <button className="practice-red-button" disabled={!file || busy} type="submit">
+            {busy ? "Importing..." : <><FileUp size={16} /> Import Questions</>}
+          </button>
+        </form>
+      </div>
+      {result && (
+        <div className="bulk-import-result">
+          <div className="bulk-import-summary">
+            <span className="ok"><CheckCircle2 size={15} /> {result.created_count} imported</span>
+            {result.errors?.length > 0 && <span className="warn"><AlertTriangle size={15} /> {result.errors.length} skipped</span>}
+          </div>
+          {result.errors?.length > 0 && (
+            <ul className="bulk-import-errors">
+              {result.errors.map((item, index) => <li key={index}>Row {item.row}: {item.error}</li>)}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const FORM_STEPS = [
+  ["1", "Basic Details"],
+  ["2", "Write Question"],
+  ["3", "Explanation & Save"],
+];
+
+function QuestionForm({ form, setForm, onSubmit, editing, onCancel }) {
+  const [step, setStep] = useState(1);
+
+  useEffect(() => {
+    setStep(1);
+  }, [editing]);
+
+  const step1Valid = form.class_level && form.subject && form.chapter && form.marks;
+  const step2Valid = form.text
+    && (form.question_type !== "mcq" || (form.options[0] && form.options[1] && form.correct_answer))
+    && (form.question_type !== "true_false" || form.correct_answer);
+
+  function goNext() {
+    setStep((current) => Math.min(current + 1, 3));
+  }
+  function goBack() {
+    setStep((current) => Math.max(current - 1, 1));
+  }
+  function handleSubmit(event) {
+    event.preventDefault();
+    if (step < 3) { goNext(); return; }
+    onSubmit(event);
+  }
+
+  return (
+    <form className="practice-wizard" onSubmit={handleSubmit}>
+      <ol className="wizard-steps">
+        {FORM_STEPS.map(([key, label], index) => (
+          <li key={key} className={step === index + 1 ? "active" : step > index + 1 ? "done" : ""}>
+            <span>{step > index + 1 ? <CheckCircle2 size={14} /> : key}</span>
+            {label}
+          </li>
+        ))}
+      </ol>
+
+      {step === 1 && (
+        <div className="wizard-panel">
+          <div className="wizard-field">
+            <label>Class</label>
+            <input placeholder="e.g. 10" value={form.class_level} onChange={(event) => setForm({ ...form, class_level: event.target.value })} required />
+          </div>
+          <div className="wizard-field">
+            <label>Subject</label>
+            <input placeholder="e.g. Science" value={form.subject} onChange={(event) => setForm({ ...form, subject: event.target.value })} required />
+          </div>
+          <div className="wizard-field">
+            <label>Chapter / Topic</label>
+            <input placeholder="e.g. Light" value={form.chapter} onChange={(event) => setForm({ ...form, chapter: event.target.value })} required />
+          </div>
+          <div className="wizard-field">
+            <label>Question Type</label>
+            <select value={form.question_type} onChange={(event) => setForm({ ...form, question_type: event.target.value, correct_answer: "" })}>
+              {QUESTION_TYPES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}
+            </select>
+          </div>
+          <div className="wizard-field">
+            <label>Difficulty</label>
+            <select value={form.difficulty} onChange={(event) => setForm({ ...form, difficulty: event.target.value })}>
+              {DIFFICULTIES.map((item) => <option key={item}>{item}</option>)}
+            </select>
+          </div>
+          <div className="wizard-field">
+            <label>Marks</label>
+            <input inputMode="decimal" placeholder="e.g. 1" value={form.marks} onChange={(event) => setForm({ ...form, marks: event.target.value })} required />
+          </div>
+        </div>
+      )}
+
+      {step === 2 && (
+        <div className="wizard-panel single">
+          <div className="wizard-field">
+            <label>Question text</label>
+            <textarea placeholder="Type your question here" value={form.text} onChange={(event) => setForm({ ...form, text: event.target.value })} required />
+          </div>
+          {form.question_type === "mcq" && (
+            <div className="wizard-field">
+              <label>Options (first two required)</label>
+              <div className="wizard-options">
+                {form.options.map((option, index) => (
+                  <input key={index} placeholder={`Option ${String.fromCharCode(65 + index)}`} value={option} onChange={(event) => setForm({ ...form, options: form.options.map((item, itemIndex) => itemIndex === index ? event.target.value : item) })} required={index < 2} />
+                ))}
+              </div>
+            </div>
+          )}
+          {form.question_type === "mcq" && (
+            <div className="wizard-field">
+              <label>Correct option (A, B, C or D)</label>
+              <input placeholder="e.g. A" value={form.correct_answer} onChange={(event) => setForm({ ...form, correct_answer: event.target.value })} required />
+            </div>
+          )}
+          {form.question_type === "true_false" && (
+            <div className="wizard-field">
+              <label>Correct answer</label>
+              <select value={form.correct_answer} onChange={(event) => setForm({ ...form, correct_answer: event.target.value })} required>
+                <option value="">Select True or False</option>
+                <option>True</option>
+                <option>False</option>
+              </select>
+            </div>
+          )}
+          {["short", "long"].includes(form.question_type) && (
+            <div className="wizard-field">
+              <label>Expected / model answer (optional)</label>
+              <textarea placeholder="What a correct answer should include" value={form.expected_answer} onChange={(event) => setForm({ ...form, expected_answer: event.target.value })} />
+            </div>
+          )}
+        </div>
+      )}
+
+      {step === 3 && (
+        <div className="wizard-panel single">
+          <div className="wizard-field">
+            <label>Explanation (optional)</label>
+            <textarea placeholder="Why is this the correct answer?" value={form.explanation} onChange={(event) => setForm({ ...form, explanation: event.target.value })} />
+          </div>
+          <div className="wizard-review">
+            <strong>{form.text || "Question text"}</strong>
+            <span>Class {form.class_level || "-"} / {form.subject || "-"} / {form.chapter || "-"}</span>
+            <small>{labelType(form.question_type)} / {form.difficulty} / {form.marks || "-"} marks</small>
+          </div>
+        </div>
+      )}
+
+      <div className="wizard-actions">
+        {step > 1 && <button className="practice-soft-button" type="button" onClick={goBack}>Back</button>}
+        {editing && <button className="practice-soft-button" type="button" onClick={onCancel}><X size={16} /> Cancel</button>}
+        <div style={{ flex: 1 }} />
+        {step < 3 && <button className="practice-red-button" type="submit" disabled={(step === 1 && !step1Valid) || (step === 2 && !step2Valid)}>Next</button>}
+        {step === 3 && <button className="practice-red-button" type="submit"><Save size={16} /> {editing ? "Save Question" : "Add Question"}</button>}
+      </div>
     </form>
   );
 }
@@ -507,6 +717,25 @@ const practiceStyles = `
   color: #f8fafc;
   padding: 10px;
 }
+.practice-wizard { display: grid; gap: 16px; }
+.wizard-steps { display: flex; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.wizard-steps li { flex: 1; display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-radius: 6px; border: 1px solid rgba(148,163,184,.16); background: rgba(4,10,20,.42); color: #8ea0b8; font-size: 12.5px; font-weight: 850; }
+.wizard-steps li span { width: 20px; height: 20px; flex: none; display: grid; place-items: center; border-radius: 999px; background: rgba(148,163,184,.16); color: #dbeafe; font-size: 11px; }
+.wizard-steps li.active { color: #fff; border-color: rgba(248,113,113,.34); background: linear-gradient(135deg, rgba(185,21,45,.28), rgba(127,16,32,.28)); }
+.wizard-steps li.active span { background: linear-gradient(135deg, #b9152d, #7f1020); color: #fff; }
+.wizard-steps li.done { color: #bbf7d0; }
+.wizard-steps li.done span { background: rgba(34,197,94,.22); color: #86efac; }
+.wizard-panel { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; padding: 14px; border: 1px solid rgba(148,163,184,.14); border-radius: 8px; background: rgba(4,10,20,.32); }
+.wizard-panel.single { grid-template-columns: 1fr; }
+.wizard-field { display: grid; gap: 6px; }
+.wizard-field label { color: #8ea0b8; font-size: 12px; font-weight: 850; }
+.wizard-field textarea { min-height: 90px; resize: vertical; }
+.wizard-options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.wizard-review { display: grid; gap: 5px; padding: 12px; border-radius: 8px; border: 1px solid rgba(148,163,184,.16); background: rgba(4,10,20,.5); }
+.wizard-review strong { color: #fff; }
+.wizard-review span, .wizard-review small { color: #8ea0b8; font-size: 12.5px; }
+.wizard-actions { display: flex; align-items: center; gap: 8px; }
+.practice-red-button:disabled { opacity: .45; cursor: not-allowed; transform: none; box-shadow: none; }
 .practice-filter { display: grid; grid-template-columns: auto repeat(6, minmax(90px, 1fr)); align-items: center; gap: 8px; margin-bottom: 10px; padding: 10px; border: 1px solid rgba(148,163,184,.16); border-radius: 8px; background: rgba(4,10,20,.42); color: #8ea0b8; }
 .practice-list { display: grid; gap: 10px; }
 .practice-list > article {
@@ -557,6 +786,18 @@ const practiceStyles = `
 .topic-mini-list small { color: #8ea0b8; grid-column: 1 / -1; }
 .topic-mini-list i { display: block; grid-column: 1 / -1; height: 8px; border-radius: 999px; background: linear-gradient(90deg, #d61f3a, #7ed957); }
 .practice-message { margin-top: 12px; padding: 10px 12px; border-radius: 8px; border: 1px solid rgba(251,113,133,.36); background: #0d1a2c; color: #fff; }
+.bulk-import { display: grid; gap: 12px; }
+.bulk-import > p { margin: 0; color: #8ea0b8; font-size: 12.5px; line-height: 1.6; }
+.bulk-import > p strong { color: #dbeafe; }
+.bulk-import-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.bulk-import-form { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.bulk-import-form input[type="file"] { color: #dbeafe; font-size: 12.5px; max-width: 240px; }
+.bulk-import-result { display: grid; gap: 8px; padding: 12px; border-radius: 8px; border: 1px solid rgba(148,163,184,.16); background: rgba(4,10,20,.42); }
+.bulk-import-summary { display: flex; gap: 14px; flex-wrap: wrap; }
+.bulk-import-summary span { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; font-weight: 850; }
+.bulk-import-summary .ok { color: #86efac; }
+.bulk-import-summary .warn { color: #fca5a5; }
+.bulk-import-errors { margin: 0; padding-left: 18px; color: #fca5a5; font-size: 12px; display: grid; gap: 4px; max-height: 160px; overflow: auto; }
 .practice-center .empty-state { color: #8ea0b8; }
 .practice-center .empty-state strong { color: #fff; }
 @media (max-width: 1240px) {
@@ -571,5 +812,7 @@ const practiceStyles = `
   .practice-grid, .practice-metric-deck, .practice-form, .practice-filter, .practice-options { grid-template-columns: 1fr; }
   .practice-form textarea { grid-column: auto; }
   .practice-table-wrap table { min-width: max-content; }
+  .wizard-steps { flex-direction: column; }
+  .wizard-panel, .wizard-options { grid-template-columns: 1fr; }
 }
 `;

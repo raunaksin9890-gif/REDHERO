@@ -1,3 +1,5 @@
+import csv
+import io
 import os
 from datetime import date, datetime, timedelta
 from uuid import uuid4
@@ -22,6 +24,7 @@ from .models import (
     Fee,
     Marks,
     Note,
+    NoteBookmark,
     Notice,
     PracticeAnswer,
     PracticeSession,
@@ -647,7 +650,14 @@ def content_view(model, fields, owner_field):
     def handler(request):
         user, query = class_query(request, model)
         if request.method == "GET":
-            return ok({"results": [simple_json(row, fields) for row in query.order_by("-created_at")]})
+            rows = list(query.order_by("-created_at"))
+            results = [simple_json(row, fields) for row in rows]
+            if model == Note and user.role == ROLE_STUDENT:
+                student = get_student_for_user(user)
+                bookmarked_ids = {str(row.note.id) for row in NoteBookmark.objects(student=student, note__in=rows)} if student else set()
+                for item in results:
+                    item["bookmarked"] = item["id"] in bookmarked_ids
+            return ok({"results": results})
         require_roles(request, [ROLE_ADMIN, ROLE_TEACHER])
         data = request.data
         if request.method in ["PUT", "DELETE"]:
@@ -1342,6 +1352,53 @@ def process_published_exam_attempts(exam):
             answer = answers.get(question.question_id)
             correct = bool(answer and normalize_answer(answer.answer) == normalize_answer(objective_correct_answer(question)))
             update_practice_tracking(attempt.student, bank_question, correct, "exam")
+
+
+QUESTION_BULK_HEADERS = ["Class", "Subject", "Chapter", "Type", "Difficulty", "Marks", "Question", "Option A", "Option B", "Option C", "Option D", "Correct Answer", "Explanation"]
+
+
+@api_view(["POST"])
+def question_bank_bulk_import(request):
+    user = require_roles(request, [ROLE_ADMIN, ROLE_TEACHER])
+    upload = request.FILES.get("file")
+    if not upload:
+        return bad("Upload a CSV file with columns: " + ", ".join(QUESTION_BULK_HEADERS))
+    try:
+        text = upload.read().decode("utf-8-sig")
+    except UnicodeDecodeError:
+        return bad("Unable to read this file. Please upload a CSV file.")
+    reader = csv.DictReader(io.StringIO(text))
+    created, errors = [], []
+    for index, row in enumerate(reader, start=2):
+        try:
+            qtype_raw = str(row.get("Type") or row.get("type") or "mcq").strip().lower()
+            qtype = {"mcq": "mcq", "true/false": "true_false", "true_false": "true_false", "short": "short", "long": "long"}.get(qtype_raw, qtype_raw)
+            options = [row.get("Option A") or "", row.get("Option B") or "", row.get("Option C") or "", row.get("Option D") or ""]
+            body = {
+                "class_level": row.get("Class") or row.get("class"),
+                "subject": row.get("Subject") or row.get("subject"),
+                "chapter": row.get("Chapter") or row.get("chapter") or "",
+                "question_type": qtype,
+                "difficulty": (row.get("Difficulty") or row.get("difficulty") or "Medium").strip() or "Medium",
+                "marks": row.get("Marks") or row.get("marks") or 1,
+                "text": row.get("Question") or row.get("question"),
+                "options": options,
+                "correct_answer": row.get("Correct Answer") or row.get("correct_answer") or "",
+                "expected_answer": row.get("Correct Answer") or row.get("correct_answer") or "" if qtype in ("short", "long") else "",
+                "explanation": row.get("Explanation") or row.get("explanation") or "",
+            }
+            if not body["text"] or not str(body["text"]).strip():
+                raise ValueError("Question text is required")
+            payload = question_bank_from_data(body, user)
+            question = QuestionBankQuestion(**payload, created_by=user).save()
+            created.append(question_bank_json(question, include_correct=True))
+        except PermissionDenied as exc:
+            errors.append({"row": index, "error": str(exc)})
+        except (TypeError, ValueError, ValidationError) as exc:
+            errors.append({"row": index, "error": str(exc) or "Invalid data in this row"})
+        except Exception as exc:
+            errors.append({"row": index, "error": "Unable to import this row"})
+    return ok({"created_count": len(created), "created": created, "errors": errors})
 
 
 @api_view(["GET", "POST", "PUT", "DELETE"])
