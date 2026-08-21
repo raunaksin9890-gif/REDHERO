@@ -1,10 +1,10 @@
 import { ArrowRight, BarChart3, Bookmark, BookOpen, CalendarCheck, ChartNoAxesCombined, Clapperboard, Clock3, Download, Eye, FileText, GraduationCap, Layers3, Megaphone, Newspaper, Play, Send, Sparkles, Target, Trophy, UsersRound, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { api } from "../api/client.js";
+import { API_URL, api } from "../api/client.js";
 import dashboardHero from "../assets/dashboard-hero.png";
 import { useAuth } from "../components/AuthProvider.jsx";
-import { EmptyState, LoadingOverlay, SkeletonGrid } from "../components/UX.jsx";
+import { LoadingOverlay, SkeletonGrid, useToast } from "../components/UX.jsx";
 
 export function Dashboard() {
   const { user } = useAuth();
@@ -79,22 +79,46 @@ export function Dashboard() {
         <WelcomeCard profile={data.profile} attendance={data.attendance_percentage} assignments={studentExtra.assignments} notes={studentExtra.notes} />
         <QuickActions />
       </section>
-      <PremiumStats data={data} extras={studentExtra} />
-      <StudentAnalytics data={data} extras={studentExtra} />
-      <NoticeList notices={data.latest_notices} featured />
-      <section className="student-card-grid">
-        <MarksCard items={data.marks || []} />
-        <AssignmentsCard items={studentExtra.assignments.slice(0, 4)} />
-        <TimetablePanel items={studentExtra.timetables} />
-        <NotesCard items={studentExtra.notes.slice(0, 3)} />
-        <VideosCard items={data.recent_videos || []} />
-        <BlogsCard items={studentExtra.blogs.slice(0, 3)} />
-        <CurrentAffairsCard items={data.current_affairs || []} />
-      </section>
+      <div className="student-lower-dashboard">
+        <DashboardSection title="Academic Overview" subtitle="Your academic performance at a glance.">
+          <PremiumStats data={data} extras={studentExtra} />
+          <StudentAnalytics data={data} extras={studentExtra} />
+          <section className="student-card-grid academic-card-grid">
+            <MarksCard items={(data.marks || []).slice(0, 3)} />
+            <AssignmentsCard items={studentExtra.assignments.slice(0, 3)} />
+            <TimetablePanel items={studentExtra.timetables} />
+          </section>
+        </DashboardSection>
+        <DashboardSection title="Learning Resources" subtitle="Recent study material and learning updates.">
+          <section className="student-card-grid resource-card-grid">
+            <InteractiveNotesCard items={studentExtra.notes.slice(0, 3)} />
+            <VideosCard items={(data.recent_videos || []).slice(0, 2)} />
+            <BlogsCard items={studentExtra.blogs.slice(0, 3)} />
+            <CurrentAffairsCard items={(data.current_affairs || []).slice(0, 3)} />
+          </section>
+        </DashboardSection>
+        <DashboardSection title="Updates & Activity" subtitle="Notices and recent school updates.">
+          <NoticeList notices={data.latest_notices} featured />
+        </DashboardSection>
+      </div>
       <Link className="floating-action" to="/learning" data-tooltip="Open learning library">
         <BookOpen size={20} />
       </Link>
     </div>
+  );
+}
+
+function DashboardSection({ title, subtitle, children }) {
+  return (
+    <section className="dashboard-section">
+      <header className="dashboard-section-head">
+        <div>
+          <h2>{title}</h2>
+          <p>{subtitle}</p>
+        </div>
+      </header>
+      {children}
+    </section>
   );
 }
 
@@ -129,20 +153,34 @@ function StudentAnalytics({ data, extras }) {
   const marks = data.marks || [];
   const averageMarks = marks.length ? Math.round(marks.reduce((sum, item) => sum + Number(item.percentage || 0), 0) / marks.length) : 0;
   const progress = Math.min(100, Math.round(((extras.notes.length || 0) + (data.recent_videos?.length || 0) + (extras.assignments.length || 0)) * 8));
+  const markBars = marks.length ? marks.slice(0, 5) : [{ subject: "Marks", percentage: 0 }];
+  const summaryBars = [
+    { label: "Attendance", value: attendance },
+    { label: "Marks", value: averageMarks },
+    { label: "Notes", value: Math.min(100, extras.notes.length * 12) },
+    { label: "Videos", value: Math.min(100, (data.recent_videos?.length || 0) * 14) },
+    { label: "Tasks", value: Math.min(100, extras.assignments.length * 12) },
+  ];
   return (
     <section className="dashboard-analytics">
       <article className="analytics-card attendance-analytics-card">
         <header><CalendarCheck size={20} /><span>Attendance Ring</span></header>
         <div className="dashboard-ring" style={{ "--value": attendance }}>
-          <strong><CountValue value={`${attendance}%`} /></strong>
-          <span>Attendance</span>
+          <div>
+            <strong><CountValue value={`${attendance}%`} /></strong>
+            <span>Attendance</span>
+          </div>
         </div>
+        <small>{attendance >= 75 ? "On track for this month" : "Needs attention this month"}</small>
       </article>
       <article className="analytics-card marks-graph-card">
         <header><BarChart3 size={20} /><span>Marks Graph</span></header>
         <div className="marks-bars">
-          {(marks.length ? marks.slice(0, 5) : [{ percentage: 0 }, { percentage: 0 }, { percentage: 0 }]).map((item, index) => (
-            <i key={`${item.id || "mark"}-${index}`} style={{ height: `${Math.max(12, Math.min(Number(item.percentage || averageMarks || 0), 100))}%` }} />
+          {markBars.map((item, index) => (
+            <span className="chart-bar-wrap" key={`${item.id || "mark"}-${index}`}>
+              <i style={{ height: `${Math.max(10, Math.min(Number(item.percentage || averageMarks || 0), 100))}%` }} />
+              <em>{String(item.subject || item.exam_type || index + 1).slice(0, 3)}</em>
+            </span>
           ))}
         </div>
         <small>Average {averageMarks}%</small>
@@ -150,11 +188,12 @@ function StudentAnalytics({ data, extras }) {
       <article className="analytics-card activity-card">
         <header><Layers3 size={20} /><span>Academic Summary</span></header>
         <div className="weekly-activity">
-          <span style={{ "--height": "58%" }} />
-          <span style={{ "--height": "72%" }} />
-          <span style={{ "--height": "48%" }} />
-          <span style={{ "--height": "86%" }} />
-          <span style={{ "--height": "64%" }} />
+          {summaryBars.map((item) => (
+            <span className="summary-bar-wrap" key={item.label}>
+              <i style={{ "--height": `${Math.max(8, item.value)}%` }} />
+              <em>{item.label.slice(0, 3)}</em>
+            </span>
+          ))}
         </div>
         <div className="course-progress-line"><span style={{ width: `${progress}%` }} /></div>
         <small>{progress}% course activity</small>
@@ -223,6 +262,37 @@ function youtubeThumb(url = "") {
   return match ? `https://img.youtube.com/vi/${match[1]}/hqdefault.jpg` : "";
 }
 
+function resolveAssetUrl(value = "") {
+  if (!value) return "";
+  try {
+    const apiRoot = API_URL.replace(/\/api\/?$/, "");
+    return new URL(value, `${apiRoot}/`).toString();
+  } catch {
+    return value;
+  }
+}
+
+function downloadName(item) {
+  const title = (item.title || "redhero-note").replace(/[^a-z0-9_-]+/gi, "-").replace(/^-+|-+$/g, "").toLowerCase();
+  return `${title || "redhero-note"}.pdf`;
+}
+
+function triggerNoteDownload(item, toast) {
+  const url = resolveAssetUrl(item.pdf_url);
+  if (!url) {
+    toast?.show("No PDF is attached to this note.", "error");
+    return;
+  }
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = downloadName(item);
+  link.target = "_blank";
+  link.rel = "noreferrer";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+}
+
 function WelcomeCard({ profile, attendance, assignments = [], notes = [] }) {
   const pending = assignments.filter((item) => new Date(item.deadline) >= new Date()).length;
   return (
@@ -259,7 +329,7 @@ function NoticeList({ notices = [], featured = false }) {
     <section className={`panel notice-board ${featured ? "student-notice-board" : "wide"}`}>
       <h2><Megaphone size={20} /> Notice Board <span className="section-count">{notices.length} live</span></h2>
       <div className="notice-viewport" onMouseEnter={() => setPaused(true)} onMouseLeave={() => setPaused(false)}>
-        {notices.length === 0 && <EmptyState title="No notices yet" message="Published notices will appear here." />}
+        {notices.length === 0 && <CardEmpty icon={Megaphone} title="No notices right now" message="Published notices will appear here." />}
         <div className={featured ? "notice-slider" : "notice-marquee"} style={featured ? { transform: `translateY(-${active * 100}%)` } : undefined}>
           {(featured ? notices : [...notices, ...notices]).map((notice, index) => {
             const important = importantWords.some((word) => `${notice.title} ${notice.body}`.toLowerCase().includes(word));
@@ -324,7 +394,7 @@ function TimetablePanel({ items = [] }) {
     <section className="student-feature-card stagger-card" style={{ "--stagger": 5 }}>
       <CardHeader icon={Clock3} title="Timetable" />
       <div className="stack accordion-list">
-        {periods.length === 0 && <EmptyState title="No timetable" message="Timetable entries will appear here." />}
+        {periods.length === 0 && <CardEmpty icon={Clock3} title="No timetable available" message="Timetable entries will appear here." />}
         {periods.map((period, index) => (
           <details key={`${period.day}-${period.time}-${index}`} className="accordion-item">
             <summary>{period.day} · {period.time}</summary>
@@ -345,12 +415,13 @@ function CardHeader({ icon: Icon, title, action }) {
   );
 }
 
-function CardEmpty({ title, message }) {
+function CardEmpty({ icon: Icon = Sparkles, title, message, action }) {
   return (
     <div className="premium-empty">
-      <div className="empty-illustration"><Sparkles size={24} /></div>
+      <div className="empty-illustration"><Icon size={24} /></div>
       <strong>{title}</strong>
       <span>{message}</span>
+      {action}
     </div>
   );
 }
@@ -360,7 +431,7 @@ function NotesCard({ items = [] }) {
     <section className="student-feature-card stagger-card" style={{ "--stagger": 0 }}>
       <CardHeader icon={FileText} title="Notes Library" action={<Link className="mini-button" to="/learning">All notes</Link>} />
       <div className="resource-list">
-        {items.length === 0 && <CardEmpty title="No notes yet" message="Class notes and PDFs will appear here." />}
+        {items.length === 0 && <CardEmpty icon={FileText} title="No notes available" message="Your class notes will appear here." action={<Link className="mini-button" to="/learning">Open library</Link>} />}
         {items.map((item) => (
           <article className="note-resource" key={item.id}>
             <div className="pdf-thumb"><FileText size={28} /><span>PDF</span></div>
@@ -380,12 +451,81 @@ function NotesCard({ items = [] }) {
   );
 }
 
+function InteractiveNotesCard({ items = [] }) {
+  const toast = useToast();
+  const [bookmarked, setBookmarked] = useState({});
+  const [pending, setPending] = useState({});
+
+  useEffect(() => {
+    setBookmarked(Object.fromEntries(items.map((item) => [item.id, Boolean(item.bookmarked)])));
+  }, [items]);
+
+  async function toggleBookmark(item) {
+    if (!item.id || pending[item.id]) return;
+    const nextValue = !bookmarked[item.id];
+    setPending((state) => ({ ...state, [item.id]: true }));
+    setBookmarked((state) => ({ ...state, [item.id]: nextValue }));
+    try {
+      const response = await api(`/notes/${item.id}/bookmark/`, { method: nextValue ? "POST" : "DELETE" });
+      setBookmarked((state) => ({ ...state, [item.id]: Boolean(response.bookmarked) }));
+      toast?.show(response.message || (response.bookmarked ? "Note bookmarked" : "Bookmark removed"));
+    } catch (err) {
+      setBookmarked((state) => ({ ...state, [item.id]: !nextValue }));
+      toast?.show(err.message || "Unable to update bookmark.", "error");
+    } finally {
+      setPending((state) => ({ ...state, [item.id]: false }));
+    }
+  }
+
+  return (
+    <section className="student-feature-card stagger-card" style={{ "--stagger": 0 }}>
+      <CardHeader icon={FileText} title="Notes Library" action={<Link className="mini-button" to="/learning">All notes</Link>} />
+      <div className="resource-list">
+        {items.length === 0 && <CardEmpty icon={FileText} title="No notes available" message="Your class notes will appear here." action={<Link className="mini-button" to="/learning">Open library</Link>} />}
+        {items.map((item) => {
+          const pdfUrl = resolveAssetUrl(item.pdf_url);
+          const isBookmarked = Boolean(bookmarked[item.id]);
+          return (
+            <article className="note-resource" key={item.id}>
+              <div className="pdf-thumb"><FileText size={28} /><span>PDF</span></div>
+              <div>
+                <strong>{item.title}</strong>
+                <span>{item.subject} Â· {item.chapter}</span>
+              </div>
+              <div className="card-button-row">
+                <button className="mini-button" type="button" disabled={Boolean(pending[item.id])} onClick={() => toggleBookmark(item)}>
+                  <Bookmark size={15} /> {isBookmarked ? "Bookmarked" : "Bookmark"}
+                </button>
+                <a
+                  className="mini-button"
+                  href={pdfUrl || "#"}
+                  target="_blank"
+                  rel="noreferrer"
+                  onClick={(event) => {
+                    if (!pdfUrl) {
+                      event.preventDefault();
+                      toast?.show("No PDF is attached to this note.", "error");
+                    }
+                  }}
+                >
+                  <Eye size={15} /> View
+                </a>
+                <button className="mini-button red" type="button" onClick={() => triggerNoteDownload(item, toast)}><Download size={15} /> Download</button>
+              </div>
+            </article>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 function VideosCard({ items = [] }) {
   return (
     <section className="student-feature-card stagger-card" style={{ "--stagger": 1 }}>
       <CardHeader icon={Clapperboard} title="Lecture Videos" action={<Link className="mini-button" to="/learning">Watch all</Link>} />
       <div className="media-grid">
-        {items.length === 0 && <CardEmpty title="No videos yet" message="New lessons will appear here." />}
+        {items.length === 0 && <CardEmpty icon={Clapperboard} title="No videos yet" message="New video lessons will appear here." action={<Link className="mini-button" to="/learning">Browse lessons</Link>} />}
         {items.map((item) => (
           <article className="video-resource" key={item.id}>
             <div className="video-thumb" style={youtubeThumb(item.youtube_url) ? { backgroundImage: `url(${youtubeThumb(item.youtube_url)})` } : undefined}>
@@ -408,7 +548,7 @@ function AssignmentsCard({ items = [] }) {
     <section className="student-feature-card stagger-card" style={{ "--stagger": 2 }}>
       <CardHeader icon={Send} title="Assignments" action={<Link className="mini-button" to="/operations">Open</Link>} />
       <div className="resource-list">
-        {items.length === 0 && <CardEmpty title="No assignments" message="Assigned work will appear here." />}
+        {items.length === 0 && <CardEmpty icon={Send} title="No assignments" message="Assigned work will appear here." action={<Link className="mini-button" to="/operations">Open tasks</Link>} />}
         {items.map((item) => (
           <article className="assignment-resource" key={item.id}>
             <div>
@@ -449,9 +589,9 @@ function AttendanceCard({ percentage = 0 }) {
 function MarksCard({ items = [] }) {
   return (
     <section className="student-feature-card stagger-card" style={{ "--stagger": 4 }}>
-      <CardHeader icon={Trophy} title="Marks" />
+      <CardHeader icon={Trophy} title="Marks" action={<Link className="mini-button" to="/operations">View all</Link>} />
       <div className="resource-list">
-        {items.length === 0 && <CardEmpty title="No marks yet" message="Recent marks will appear here." />}
+        {items.length === 0 && <CardEmpty icon={Trophy} title="No marks yet" message="Recent marks will appear here." action={<Link className="mini-button" to="/operations">View records</Link>} />}
         {items.map((item) => (
           <article className="mark-resource" key={item.id}>
             <div>
@@ -472,7 +612,7 @@ function BlogsCard({ items = [] }) {
     <section className="student-feature-card stagger-card" style={{ "--stagger": 6 }}>
       <CardHeader icon={Newspaper} title="Blogs" action={<Link className="mini-button" to="/learning">Read all</Link>} />
       <div className="resource-list">
-        {items.length === 0 && <CardEmpty title="No blogs yet" message="Helpful articles will appear here." />}
+        {items.length === 0 && <CardEmpty icon={Newspaper} title="No blogs available" message="New learning articles will appear here." action={<Link className="mini-button" to="/learning">Read all</Link>} />}
         {items.map((item) => (
           <article className="news-resource" key={item.id}>
             <div className="news-thumb"><Newspaper size={22} /></div>
@@ -494,7 +634,7 @@ function CurrentAffairsCard({ items = [] }) {
     <section className="student-feature-card stagger-card" style={{ "--stagger": 7 }}>
       <CardHeader icon={Sparkles} title="Current Affairs" action={<Link className="mini-button" to="/learning">Explore</Link>} />
       <div className="resource-list">
-        {items.length === 0 && <CardEmpty title="No current affairs" message="Latest news cards will appear here." />}
+        {items.length === 0 && <CardEmpty icon={Sparkles} title="No current affairs" message="Latest news cards will appear here." action={<Link className="mini-button" to="/learning">Explore</Link>} />}
         {items.map((item) => (
           <article className="news-resource" key={item.id}>
             <div className={`news-thumb current-affair-thumb ${item.image_url ? "has-image" : ""}`}>
@@ -1027,17 +1167,72 @@ const dashboardPremiumStyles = `
   border-color: rgba(244,63,94,.44);
   background: linear-gradient(135deg, rgba(225,29,72,.34), rgba(15,23,42,.56));
 }
-.student-premium .premium-stat-grid {
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+.student-premium .student-lower-dashboard {
+  display: grid;
+  gap: 22px;
+}
+.student-premium .dashboard-section {
+  display: grid;
+  gap: 14px;
+}
+.student-premium .dashboard-section-head {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
   gap: 12px;
-  margin-bottom: 14px;
+  padding: 0 2px;
+}
+.student-premium .dashboard-section-head h2 {
+  margin: 0;
+  color: #ffffff;
+  font-size: clamp(18px, 2vw, 22px);
+  letter-spacing: 0;
+}
+.student-premium .dashboard-section-head p {
+  margin: 5px 0 0;
+  color: #aeb6c4;
+  font-size: 13px;
+  line-height: 1.45;
+}
+.student-premium .premium-stat-grid {
+  grid-template-columns: repeat(6, minmax(118px, 1fr));
+  gap: 14px;
 }
 .student-premium .premium-stat-card {
-  min-height: 128px;
-  padding: 14px;
+  min-height: 138px;
+  padding: 16px;
+  display: grid;
+  align-content: space-between;
+}
+.student-premium .premium-stat-card,
+.student-premium .analytics-card,
+.student-premium .student-feature-card,
+.student-premium .student-notice-board {
+  border-radius: 10px;
+  border-color: rgba(244,63,94,.24);
+  background:
+    linear-gradient(180deg, rgba(28,20,28,.90), rgba(8,10,16,.96)),
+    linear-gradient(135deg, rgba(255,255,255,.055), rgba(244,63,94,.03));
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.06),
+    0 18px 50px rgba(0,0,0,.32),
+    0 0 26px rgba(214,31,58,.06);
+}
+.student-premium .premium-stat-card:hover,
+.student-premium .analytics-card:hover,
+.student-premium .student-feature-card:hover,
+.student-premium .student-notice-board:hover {
+  transform: translateY(-3px);
+  border-color: rgba(244,63,94,.40);
+  box-shadow:
+    inset 0 1px 0 rgba(255,255,255,.075),
+    0 24px 60px rgba(0,0,0,.38),
+    0 0 34px rgba(214,31,58,.10);
 }
 .student-premium .premium-stat-card::before,
-.student-premium .analytics-card::before {
+.student-premium .analytics-card::before,
+.student-premium .student-feature-card::before,
+.student-premium .student-notice-board::before {
   width: 130px;
   height: 130px;
   background: linear-gradient(135deg, rgba(244,63,94,.18), transparent 68%);
@@ -1052,44 +1247,64 @@ const dashboardPremiumStyles = `
   border: 1px solid rgba(244,63,94,.18);
 }
 .student-premium .premium-stat-card > span {
-  margin-top: 12px;
+  margin-top: 10px;
   color: #aeb6c4;
   font-size: 12px;
+  line-height: 1.25;
 }
 .student-premium .premium-stat-card strong {
-  margin-top: 6px;
-  font-size: 28px;
+  margin-top: 5px;
+  font-size: clamp(24px, 2.2vw, 31px);
+  letter-spacing: 0;
+  overflow-wrap: anywhere;
 }
 .student-premium .premium-stat-card small {
   color: #cbd5e1;
+  font-size: 11px;
+  line-height: 1.3;
 }
 .student-premium .dashboard-analytics {
-  gap: 14px;
-  margin-bottom: 14px;
+  gap: 16px;
 }
 .student-premium .analytics-card {
-  min-height: 292px;
+  min-height: 252px;
   padding: 18px;
+  display: grid;
+  align-content: space-between;
+}
+.student-premium .analytics-card header {
+  margin-bottom: 10px;
 }
 .student-premium .dashboard-ring {
-  width: 170px;
-  height: 170px;
+  width: clamp(132px, 12vw, 158px);
+  height: clamp(132px, 12vw, 158px);
+  margin: 2px auto;
   background:
-    radial-gradient(circle, #090a0f 54%, transparent 55%),
+    radial-gradient(circle, #090a0f 50%, transparent 51%),
     conic-gradient(#f43f5e calc(var(--value) * 1%), rgba(255,255,255,.08) 0);
   box-shadow:
-    inset 0 0 0 11px rgba(7,8,13,.94),
+    inset 0 0 0 12px rgba(7,8,13,.94),
     inset 0 0 24px rgba(244,63,94,.22),
     0 18px 42px rgba(0,0,0,.34),
     0 0 40px rgba(225,29,72,.20);
 }
+.student-premium .dashboard-ring > div {
+  display: grid;
+  place-items: center;
+  gap: 2px;
+}
 .student-premium .dashboard-ring strong {
-  font-size: 38px;
+  font-size: clamp(30px, 3vw, 38px);
+}
+.student-premium .dashboard-ring span {
+  font-size: 12px;
+  color: #aeb6c4;
+  font-weight: 850;
 }
 .student-premium .marks-bars,
 .student-premium .weekly-activity {
-  height: 164px;
-  border-radius: 8px;
+  height: 134px;
+  border-radius: 10px;
   gap: 14px;
   background:
     linear-gradient(rgba(255,255,255,.045) 1px, transparent 1px),
@@ -1097,39 +1312,80 @@ const dashboardPremiumStyles = `
   background-size: 100% 25%;
   border-color: rgba(255,255,255,.09);
 }
-.student-premium .marks-bars i {
+.student-premium .chart-bar-wrap,
+.student-premium .summary-bar-wrap {
+  min-width: 0;
+  height: 100%;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 7px;
+  color: #94a3b8;
+  font-size: 10px;
+  font-style: normal;
+  text-align: center;
+  background: transparent;
+  box-shadow: none;
+  border-radius: 0;
+}
+.student-premium .chart-bar-wrap i,
+.student-premium .summary-bar-wrap i {
+  display: block;
+  width: 100%;
+  min-height: 10px;
+  align-self: end;
   border-radius: 7px 7px 3px 3px;
   background: linear-gradient(180deg, #fb7185, #be123c);
   box-shadow: inset 0 1px 0 rgba(255,255,255,.20), 0 10px 26px rgba(225,29,72,.18);
+  animation: dashBars 520ms ease both;
 }
-.student-premium .marks-bars i:nth-child(1) { background: linear-gradient(180deg, #60a5fa, #1d4ed8); }
-.student-premium .marks-bars i:nth-child(2) { background: linear-gradient(180deg, #c084fc, #7e22ce); }
-.student-premium .marks-bars i:nth-child(4) { background: linear-gradient(180deg, #fbbf24, #d97706); }
-.student-premium .weekly-activity span {
-  border-radius: 7px 7px 3px 3px;
-  background: linear-gradient(180deg, #f43f5e, #7f1020);
+.student-premium .chart-bar-wrap em,
+.student-premium .summary-bar-wrap em {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-style: normal;
+}
+.student-premium .chart-bar-wrap:nth-child(1) i { background: linear-gradient(180deg, #60a5fa, #1d4ed8); }
+.student-premium .chart-bar-wrap:nth-child(2) i { background: linear-gradient(180deg, #c084fc, #7e22ce); }
+.student-premium .chart-bar-wrap:nth-child(4) i { background: linear-gradient(180deg, #fbbf24, #d97706); }
+.student-premium .summary-bar-wrap i {
+  height: var(--height);
 }
 .student-premium .course-progress-line {
   height: 8px;
   background: rgba(255,255,255,.08);
 }
 .student-premium .student-card-grid {
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 14px;
+  grid-template-columns: repeat(12, minmax(0, 1fr));
+  grid-auto-flow: dense;
+  gap: 16px;
 }
 .student-premium .student-feature-card {
-  min-height: 276px;
-  padding: 16px;
+  grid-column: span 3;
+  min-height: 292px;
+  padding: 18px;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 12px;
 }
 .student-premium .student-card-header {
-  margin-bottom: 12px;
+  margin-bottom: 0;
+  min-height: 38px;
+  align-items: center;
+  gap: 10px;
 }
 .student-premium .student-card-header > div {
   gap: 9px;
+  min-width: 0;
+}
+.student-premium .student-card-header h2 {
+  overflow-wrap: anywhere;
 }
 .student-premium .student-card-header svg {
-  width: 34px;
-  height: 34px;
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
   padding: 8px;
   border-radius: 8px;
   color: #fecdd3;
@@ -1138,7 +1394,24 @@ const dashboardPremiumStyles = `
 }
 .student-premium .notice-board {
   border-radius: 8px;
-  margin-bottom: 14px;
+  min-height: 214px;
+}
+.student-premium .student-notice-board .notice-viewport {
+  height: 132px;
+}
+.student-premium .student-notice-board .notice-item {
+  min-height: 132px;
+}
+.student-premium .student-notice-board .premium-empty {
+  min-height: 132px;
+}
+.student-premium .resource-list,
+.student-premium .media-grid,
+.student-premium .accordion-list {
+  display: grid;
+  gap: 10px;
+  min-height: 0;
+  align-content: start;
 }
 .student-premium .notice-item,
 .student-premium .note-resource,
@@ -1153,18 +1426,76 @@ const dashboardPremiumStyles = `
   border: 1px solid rgba(255,255,255,.09);
   box-shadow: inset 0 1px 0 rgba(255,255,255,.035);
 }
+.student-premium .note-resource,
+.student-premium .assignment-resource,
+.student-premium .mark-resource,
+.student-premium .news-resource,
+.student-premium .video-resource {
+  padding: 12px;
+  transition: transform 210ms ease, border-color 210ms ease, background 210ms ease, box-shadow 210ms ease;
+}
+.student-premium .note-resource,
+.student-premium .news-resource {
+  grid-template-columns: 46px minmax(0, 1fr);
+}
+.student-premium .assignment-resource,
+.student-premium .mark-resource {
+  gap: 10px;
+}
+.student-premium .assignment-resource > div:first-child,
+.student-premium .mark-resource > div,
+.student-premium .note-resource > div,
+.student-premium .news-resource > div {
+  min-width: 0;
+}
+.student-premium .note-resource strong,
+.student-premium .assignment-resource strong,
+.student-premium .mark-resource strong,
+.student-premium .news-resource strong,
+.student-premium .video-resource strong {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.student-premium .assignment-resource span:not(.subject-chip):not(.due-badge):not(.status-badge),
+.student-premium .news-resource span:not(.subject-chip),
+.student-premium .note-resource span,
+.student-premium .video-resource > span {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.student-premium .pdf-thumb,
+.student-premium .news-thumb {
+  width: 46px;
+  height: 46px;
+}
+.student-premium .video-thumb {
+  min-height: 116px;
+}
+.student-premium .card-button-row {
+  gap: 7px;
+}
+.student-premium .assignment-meta {
+  justify-items: end;
+  align-self: stretch;
+}
 .student-premium .note-resource:hover,
 .student-premium .assignment-resource:hover,
 .student-premium .mark-resource:hover,
 .student-premium .news-resource:hover,
 .student-premium .video-resource:hover,
 .student-premium .accordion-item:hover {
+  transform: translateY(-2px);
   border-color: rgba(244,63,94,.28);
   background: rgba(22,13,20,.72);
 }
 .student-premium .mini-button {
-  min-height: 32px;
-  border-radius: 7px;
+  min-height: 34px;
+  padding: 0 11px;
+  border-radius: 8px;
   background: rgba(255,255,255,.065);
   border-color: rgba(255,255,255,.10);
   box-shadow: inset 0 1px 0 rgba(255,255,255,.045);
@@ -1181,12 +1512,33 @@ const dashboardPremiumStyles = `
 .student-premium .status-badge,
 .student-premium .grade-badge {
   border-radius: 999px;
+  min-height: 24px;
+  padding: 0 9px;
+  font-size: 11px;
+  font-weight: 900;
+  white-space: nowrap;
 }
 .student-premium .video-thumb,
 .student-premium .news-thumb,
 .student-premium .pdf-thumb,
 .student-premium .empty-illustration {
   border-radius: 8px;
+}
+.student-premium .premium-empty {
+  min-height: 198px;
+  padding: 18px;
+  align-content: center;
+  gap: 9px;
+  color: #aeb6c4;
+  text-align: center;
+}
+.student-premium .empty-illustration {
+  width: 48px;
+  height: 48px;
+  margin: 0 auto;
+  color: #fecdd3;
+  background: rgba(225,29,72,.14);
+  border: 1px solid rgba(244,63,94,.18);
 }
 .student-premium .current-affair-thumb {
   position: relative;
@@ -1221,9 +1573,11 @@ const dashboardPremiumStyles = `
   box-shadow: 0 20px 46px rgba(225,29,72,.30), 0 0 28px rgba(244,63,94,.18);
 }
 @media (max-width: 1280px) {
-  .student-premium .premium-stat-grid,
-  .student-premium .student-card-grid {
+  .student-premium .premium-stat-grid {
     grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+  .student-premium .student-feature-card {
+    grid-column: span 4;
   }
 }
 @media (max-width: 980px) {
@@ -1231,9 +1585,11 @@ const dashboardPremiumStyles = `
   .student-premium .dashboard-analytics {
     grid-template-columns: 1fr;
   }
-  .student-premium .premium-stat-grid,
-  .student-premium .student-card-grid {
+  .student-premium .premium-stat-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .student-premium .student-feature-card {
+    grid-column: span 6;
   }
 }
 @media (max-width: 640px) {
@@ -1245,6 +1601,22 @@ const dashboardPremiumStyles = `
   .student-premium .premium-stat-grid,
   .student-premium .student-card-grid {
     grid-template-columns: 1fr;
+  }
+  .student-premium .student-lower-dashboard {
+    gap: 14px;
+  }
+  .student-premium .student-feature-card {
+    grid-column: span 1;
+    min-height: 0;
+  }
+  .student-premium .note-resource,
+  .student-premium .news-resource,
+  .student-premium .assignment-resource,
+  .student-premium .mark-resource {
+    grid-template-columns: 1fr;
+  }
+  .student-premium .assignment-meta {
+    justify-items: start;
   }
   .student-premium .student-welcome-card {
     min-height: 300px;
