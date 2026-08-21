@@ -815,4 +815,83 @@ const practiceStyles = `
   .wizard-steps { flex-direction: column; }
   .wizard-panel, .wizard-options { grid-template-columns: 1fr; }
 }
+
+html[data-theme="light"] .practice-center {
+  color: #172033;
+  background:
+    radial-gradient(circle at 10% 0%, rgba(214,31,58,.10), transparent 30%),
+    radial-gradient(circle at 90% 8%, rgba(37,99,235,.08), transparent 28%),
+    linear-gradient(145deg, #f8fafc, #ffffff 52%, #f7f8fb);
+  border-color: rgba(203,213,225,.82);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.9), 0 24px 70px rgba(15,23,42,.08);
+}
+html[data-theme="light"] .practice-center .practice-head h1,
+html[data-theme="light"] .practice-center .practice-panel h2,
+html[data-theme="light"] .practice-center .practice-metric-deck strong,
+html[data-theme="light"] .practice-center .wizard-review strong,
+html[data-theme="light"] .practice-center .practice-list strong,
+html[data-theme="light"] .practice-center .practice-question h2,
+html[data-theme="light"] .practice-center .topic-mini-list span,
+html[data-theme="light"] .practice-center .topic-mini-list strong,
+html[data-theme="light"] .practice-center .empty-state strong { color: #172033; }
+html[data-theme="light"] .practice-center .practice-head p,
+html[data-theme="light"] .practice-center .practice-panel header > span,
+html[data-theme="light"] .practice-center .practice-panel small,
+html[data-theme="light"] .practice-center .practice-metric-deck span,
+html[data-theme="light"] .practice-center .wizard-field label,
+html[data-theme="light"] .practice-center .wizard-review span,
+html[data-theme="light"] .practice-center .wizard-review small,
+html[data-theme="light"] .practice-center .practice-list span,
+html[data-theme="light"] .practice-center .practice-list small,
+html[data-theme="light"] .practice-center .topic-mini-list small,
+html[data-theme="light"] .practice-center .bulk-import > p,
+html[data-theme="light"] .practice-center .empty-state { color: #64748b; }
+html[data-theme="light"] .practice-center .practice-panel,
+html[data-theme="light"] .practice-center .practice-metric-deck article {
+  border-color: rgba(203,213,225,.82);
+  background: linear-gradient(180deg, rgba(255,255,255,.98), rgba(248,250,252,.94));
+  box-shadow: 0 18px 48px rgba(15,23,42,.08);
+}
+html[data-theme="light"] .practice-center .practice-tabs button,
+html[data-theme="light"] .practice-center .practice-soft-button {
+  color: #334155;
+  background: #ffffff;
+  border-color: rgba(203,213,225,.9);
+}
+html[data-theme="light"] .practice-center .practice-tabs button.active,
+html[data-theme="light"] .practice-center .practice-red-button { color: #ffffff; background: linear-gradient(135deg, #d61f3a, #8f1026); }
+html[data-theme="light"] .practice-center .practice-form input,
+html[data-theme="light"] .practice-center .practice-form select,
+html[data-theme="light"] .practice-center .practice-form textarea,
+html[data-theme="light"] .practice-center .practice-filter input,
+html[data-theme="light"] .practice-center .practice-filter select,
+html[data-theme="light"] .practice-center .practice-question textarea {
+  color: #172033;
+  background: #ffffff;
+  border-color: rgba(203,213,225,.9);
+}
+html[data-theme="light"] .practice-center .wizard-steps li,
+html[data-theme="light"] .practice-center .wizard-panel,
+html[data-theme="light"] .practice-center .wizard-review,
+html[data-theme="light"] .practice-center .practice-filter,
+html[data-theme="light"] .practice-center .practice-list > article,
+html[data-theme="light"] .practice-center .practice-question,
+html[data-theme="light"] .practice-center .topic-mini-list div,
+html[data-theme="light"] .practice-center .bulk-import-result {
+  color: #334155;
+  background: #f8fafc;
+  border-color: rgba(203,213,225,.76);
+}
+html[data-theme="light"] .practice-center .wizard-steps li span { color: #334155; background: #e2e8f0; }
+html[data-theme="light"] .practice-center .wizard-steps li.active { color: #ffffff; background: linear-gradient(135deg, #d61f3a, #8f1026); }
+html[data-theme="light"] .practice-center .wizard-steps li.active span { color: #ffffff; }
+html[data-theme="light"] .practice-center .practice-options button { color: #334155; background: #ffffff; border-color: rgba(203,213,225,.9); }
+html[data-theme="light"] .practice-center .practice-options button.active { color: #ffffff; background: linear-gradient(135deg, #d61f3a, #8f1026); }
+html[data-theme="light"] .practice-center .practice-table-wrap { background: #ffffff; border-color: rgba(203,213,225,.82); }
+html[data-theme="light"] .practice-center .practice-table-wrap th,
+html[data-theme="light"] .practice-center .practice-table-wrap td { color: #334155; border-bottom-color: rgba(203,213,225,.68); }
+html[data-theme="light"] .practice-center .practice-table-wrap th { color: #64748b; background: #f1f5f9; }
+html[data-theme="light"] .practice-center .practice-message { color: #172033; background: #ffffff; border-color: rgba(214,31,58,.24); }
+html[data-theme="light"] .practice-center .bulk-import > p strong,
+html[data-theme="light"] .practice-center .bulk-import-form input[type="file"] { color: #334155; }
 `;

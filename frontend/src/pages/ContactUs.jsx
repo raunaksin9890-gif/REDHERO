@@ -320,4 +320,50 @@ const contactStyles = `
     border-radius: 20px;
   }
 }
+
+html[data-theme="light"] .contact-page {
+  color: #172033;
+  background:
+    radial-gradient(circle at 16% 6%, rgba(214,31,58,.11), transparent 30%),
+    radial-gradient(circle at 88% 8%, rgba(37,99,235,.08), transparent 28%),
+    linear-gradient(145deg, #f8fafc, #ffffff 48%, #f7f9fc);
+  border: 1px solid rgba(203,213,225,.78);
+  box-shadow: 0 24px 70px rgba(15,23,42,.08);
+}
+html[data-theme="light"] .contact-page .panel {
+  color: #172033;
+  border-color: rgba(203,213,225,.82);
+  background: linear-gradient(145deg, rgba(255,255,255,.98), rgba(248,250,252,.94));
+  box-shadow: 0 20px 58px rgba(15,23,42,.09), 0 0 40px rgba(214,31,58,.06);
+}
+html[data-theme="light"] .contact-page h2,
+html[data-theme="light"] .contact-page .contact-methods strong,
+html[data-theme="light"] .contact-page .contact-history strong,
+html[data-theme="light"] .contact-page .empty-state strong { color: #172033; }
+html[data-theme="light"] .contact-page .contact-info-panel p,
+html[data-theme="light"] .contact-page .contact-history span,
+html[data-theme="light"] .contact-page label,
+html[data-theme="light"] .contact-page .feedback-box strong,
+html[data-theme="light"] .contact-page .contact-methods span,
+html[data-theme="light"] .contact-page .empty-state { color: #64748b; }
+html[data-theme="light"] .contact-page .contact-kicker,
+html[data-theme="light"] .contact-page .contact-history em { color: #9d1430; background: #fff1f2; border-color: #fecdd3; }
+html[data-theme="light"] .contact-page .contact-methods a,
+html[data-theme="light"] .contact-page .contact-history article,
+html[data-theme="light"] .contact-page .feedback-box {
+  color: #172033;
+  background: #f8fafc;
+  border-color: rgba(203,213,225,.76);
+}
+html[data-theme="light"] .contact-page .contact-form input,
+html[data-theme="light"] .contact-page .contact-form select,
+html[data-theme="light"] .contact-page .contact-form textarea {
+  color: #172033;
+  background: #ffffff;
+  border-color: rgba(203,213,225,.9);
+}
+html[data-theme="light"] .contact-page .contact-form input[readonly] { color: #64748b; background: #f1f5f9; }
+html[data-theme="light"] .contact-page .rating-row button { color: #64748b; background: #ffffff; border-color: rgba(203,213,225,.9); }
+html[data-theme="light"] .contact-page .rating-row button.active { color: #ffffff; background: linear-gradient(135deg, #d61f3a, #8f1026); border-color: rgba(214,31,58,.42); }
+html[data-theme="light"] .contact-page .contact-message { color: #172033; }
 `;

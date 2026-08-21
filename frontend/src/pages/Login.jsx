@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import { api } from "../api/client.js";
 import { useAuth } from "../components/AuthProvider.jsx";
 import { useToast } from "../components/UX.jsx";
+import { ThemeToggle } from "../components/ThemeProvider.jsx";
 
 const CLASSES = ["6", "7", "8", "9", "10", "11", "12"];
 const VERIFY_ERROR = "Unable to verify the provided account details.";
@@ -128,6 +129,7 @@ export function Login() {
 
   return (
     <div className="auth-page">
+      <ThemeToggle className="auth-theme-toggle" />
       <section className="auth-panel">
         <div className="brand large">
           <div className="brand-mark">
@@ -185,7 +187,7 @@ export function Login() {
           </button>
         </form>}
         {recoveryStep === "choice" && <div className="recovery-choice">
-          <p style={{ margin: "0 0 14px", color: "#8ea0b8", fontSize: 13 }}>How would you like to recover your account?</p>
+          <p style={{ margin: "0 0 14px", color: "var(--muted)", fontSize: 13 }}>How would you like to recover your account?</p>
           <button className="primary" type="button" onClick={() => { setRecoveryStep("verify"); setRecoveryMessage(""); }}>
             I know my Student ID &amp; Roll Number
           </button>
@@ -197,7 +199,7 @@ export function Login() {
           </button>
         </div>}
         {recoveryStep === "message" && <form onSubmit={sendAdminMessage} autoComplete="off" noValidate>
-          <p style={{ margin: "0 0 4px", color: "#8ea0b8", fontSize: 13 }}>
+          <p style={{ margin: "0 0 4px", color: "var(--muted)", fontSize: 13 }}>
             Tell the admin what's happening. They'll reset your password and you can sign in with the new one, then set your own password.
           </p>
           <label>Your Email
@@ -223,10 +225,10 @@ export function Login() {
           <button className="secondary" type="button" onClick={() => setRecoveryStep("choice")}>Back</button>
         </form>}
         {recoveryStep === "message-sent" && <form autoComplete="off">
-          <div className="error" style={{ background: "rgba(34,197,94,.12)", borderColor: "rgba(34,197,94,.3)", color: "#bbf7d0" }}>
+          <div className="error" style={{ background: "rgba(34,197,94,.12)", borderColor: "rgba(34,197,94,.3)", color: "var(--green)" }}>
             {recoveryMessage || "Your request has been sent to the admin."}
           </div>
-          <p style={{ margin: "6px 0 0", color: "#8ea0b8", fontSize: 13 }}>
+          <p style={{ margin: "6px 0 0", color: "var(--muted)", fontSize: 13 }}>
             Once the admin resets your password, sign in with the new password — you'll be asked to set your own password right after.
           </p>
           <button className="primary" type="button" onClick={backToSignIn}>Back to Sign In</button>

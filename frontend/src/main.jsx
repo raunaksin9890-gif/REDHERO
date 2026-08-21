@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { Navigate, Route, BrowserRouter as Router, Routes } from "react-router-dom";
 import { AppShell } from "./components/AppShell.jsx";
 import { AuthProvider, useAuth } from "./components/AuthProvider.jsx";
+import { ThemeProvider } from "./components/ThemeProvider.jsx";
 import { LoadingOverlaySuppressor, LogoLoadingOverlay, PageLoader, RouteMessage, ToastProvider } from "./components/UX.jsx";
 import { Login } from "./pages/Login.jsx";
 import { ChangePassword } from "./pages/ChangePassword.jsx";
@@ -26,9 +27,11 @@ function Protected({ children }) {
 
 function App() {
   return (
-    <AuthProvider>
-      <AppContent />
-    </AuthProvider>
+    <ThemeProvider>
+      <AuthProvider>
+        <AppContent />
+      </AuthProvider>
+    </ThemeProvider>
   );
 }
 

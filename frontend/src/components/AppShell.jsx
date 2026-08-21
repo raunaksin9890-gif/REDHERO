@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { api } from "../api/client.js";
 import { useAuth } from "./AuthProvider.jsx";
+import { ThemeToggle } from "./ThemeProvider.jsx";
 
 const links = [
   { to: "/", label: "Dashboard", icon: Gauge, roles: ["super_admin", "teacher", "student"] },
@@ -99,6 +100,7 @@ export function AppShell() {
             <h1>{profile?.name || user.name}</h1>
           </div>
           <div className="topbar-actions">
+            <ThemeToggle />
             <NotificationCenter user={user} />
             <div className="identity">
               <GraduationCap size={20} />

@@ -1629,4 +1629,151 @@ const dashboardPremiumStyles = `
     display: grid;
   }
 }
+
+html[data-theme="light"] .premium-dashboard {
+  color: #172033;
+  background:
+    radial-gradient(circle at 16% 6%, rgba(214,31,58,.10), transparent 30%),
+    radial-gradient(circle at 88% 8%, rgba(37,99,235,.08), transparent 28%),
+    linear-gradient(145deg, #f8fafc, #ffffff 48%, #f7f9fc);
+  border: 1px solid rgba(203,213,225,.78);
+  box-shadow: 0 24px 70px rgba(15,23,42,.08);
+}
+html[data-theme="light"] .premium-dashboard .panel,
+html[data-theme="light"] .premium-dashboard .stat-card,
+html[data-theme="light"] .premium-dashboard .student-feature-card,
+html[data-theme="light"] .premium-dashboard .premium-stat-card,
+html[data-theme="light"] .premium-dashboard .analytics-card,
+html[data-theme="light"] .premium-dashboard .student-notice-board {
+  color: #172033;
+  border-color: rgba(203,213,225,.82);
+  background: linear-gradient(145deg, rgba(255,255,255,.98), rgba(248,250,252,.94));
+  box-shadow: 0 20px 58px rgba(15,23,42,.09), 0 0 38px rgba(214,31,58,.05);
+}
+html[data-theme="light"] .premium-dashboard .panel:hover,
+html[data-theme="light"] .premium-dashboard .stat-card:hover,
+html[data-theme="light"] .premium-dashboard .student-feature-card:hover,
+html[data-theme="light"] .premium-dashboard .premium-stat-card:hover,
+html[data-theme="light"] .premium-dashboard .analytics-card:hover,
+html[data-theme="light"] .premium-dashboard .student-notice-board:hover {
+  border-color: rgba(214,31,58,.24);
+  box-shadow: 0 28px 68px rgba(15,23,42,.13), 0 0 42px rgba(214,31,58,.08);
+}
+html[data-theme="light"] .premium-dashboard strong,
+html[data-theme="light"] .premium-dashboard h2,
+html[data-theme="light"] .premium-dashboard .analytics-card header,
+html[data-theme="light"] .premium-dashboard .student-card-header h2 { color: #172033; }
+html[data-theme="light"] .premium-dashboard .premium-stat-card span,
+html[data-theme="light"] .premium-dashboard .analytics-card small,
+html[data-theme="light"] .premium-dashboard .panel span,
+html[data-theme="light"] .premium-dashboard .student-feature-card span,
+html[data-theme="light"] .premium-dashboard .empty-state,
+html[data-theme="light"] .premium-dashboard .dashboard-section-head p { color: #64748b; }
+html[data-theme="light"] .premium-dashboard .quick-actions-card { color: #172033; background: linear-gradient(145deg, #ffffff, #f8fafc); }
+html[data-theme="light"] .premium-dashboard .quick-action {
+  color: #334155;
+  background: #ffffff;
+  border-color: rgba(203,213,225,.86);
+  box-shadow: 0 10px 24px rgba(15,23,42,.05);
+}
+html[data-theme="light"] .premium-dashboard .quick-action:hover { color: #9d1430; background: #fff7f8; box-shadow: 0 18px 38px rgba(15,23,42,.09); }
+html[data-theme="light"] .premium-dashboard .dashboard-ring {
+  background: conic-gradient(#d61f3a calc(var(--value) * 1%), #e2e8f0 0);
+  box-shadow: inset 0 0 0 15px #ffffff, 0 16px 38px rgba(15,23,42,.10);
+}
+html[data-theme="light"] .premium-dashboard .marks-bars,
+html[data-theme="light"] .premium-dashboard .weekly-activity { background: #f1f5f9; border-color: rgba(203,213,225,.76); }
+html[data-theme="light"] .premium-dashboard .course-progress-line { background: #e2e8f0; }
+html[data-theme="light"] .premium-dashboard .notice-item,
+html[data-theme="light"] .premium-dashboard .note-resource,
+html[data-theme="light"] .premium-dashboard .assignment-resource,
+html[data-theme="light"] .premium-dashboard .mark-resource,
+html[data-theme="light"] .premium-dashboard .news-resource,
+html[data-theme="light"] .premium-dashboard .video-resource,
+html[data-theme="light"] .premium-dashboard .accordion-item,
+html[data-theme="light"] .premium-dashboard .premium-empty {
+  color: #334155;
+  background: #f8fafc;
+  border-color: rgba(203,213,225,.76);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.9);
+}
+html[data-theme="light"] .premium-dashboard .notice-item:hover,
+html[data-theme="light"] .premium-dashboard .note-resource:hover,
+html[data-theme="light"] .premium-dashboard .assignment-resource:hover,
+html[data-theme="light"] .premium-dashboard .mark-resource:hover,
+html[data-theme="light"] .premium-dashboard .news-resource:hover,
+html[data-theme="light"] .premium-dashboard .video-resource:hover,
+html[data-theme="light"] .premium-dashboard .accordion-item:hover { background: #fff7f8; border-color: rgba(214,31,58,.24); }
+html[data-theme="light"] .premium-dashboard .mini-button,
+html[data-theme="light"] .premium-dashboard .secondary,
+html[data-theme="light"] .premium-dashboard .icon-button { color: #334155; background: #ffffff; border-color: rgba(203,213,225,.9); }
+
+html[data-theme="light"] .student-premium {
+  color: #172033;
+  background:
+    linear-gradient(rgba(225,29,72,.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(225,29,72,.03) 1px, transparent 1px),
+    linear-gradient(135deg, #f8fafc 0%, #ffffff 48%, #fff7f8 100%);
+  background-size: 72px 72px, 72px 72px, auto;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.9), 0 28px 80px rgba(15,23,42,.09);
+}
+html[data-theme="light"] .student-premium::before {
+  background: radial-gradient(ellipse at 45% 0%, rgba(214,31,58,.10), transparent 42%), linear-gradient(180deg, rgba(255,255,255,.46), transparent 24%);
+}
+html[data-theme="light"] .student-premium .student-welcome-card {
+  color: #ffffff;
+  border-color: rgba(244,63,94,.30);
+  background-image:
+    linear-gradient(90deg, rgba(10,9,15,.98) 0%, rgba(87,16,35,.88) 54%, rgba(22,12,20,.90) 100%),
+    url("${dashboardHero}");
+  box-shadow: 0 22px 58px rgba(74,13,31,.23);
+}
+html[data-theme="light"] .student-premium .student-welcome-card h2,
+html[data-theme="light"] .student-premium .student-welcome-card strong { color: #ffffff; }
+html[data-theme="light"] .student-premium .student-welcome-card p { color: #e2e8f0; }
+html[data-theme="light"] .student-premium .student-welcome-copy .eyebrow { color: #fecdd3; }
+html[data-theme="light"] .student-premium .summary-chip-row span { color: #ffffff; background: rgba(255,255,255,.09); border-color: rgba(255,255,255,.16); }
+html[data-theme="light"] .student-premium .premium-stat-card,
+html[data-theme="light"] .student-premium .analytics-card,
+html[data-theme="light"] .student-premium .student-feature-card,
+html[data-theme="light"] .student-premium .student-notice-board,
+html[data-theme="light"] .student-premium .quick-actions-card {
+  color: #172033;
+  border-color: rgba(203,213,225,.82);
+  background: linear-gradient(180deg, rgba(255,255,255,.98), rgba(248,250,252,.94));
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.94), 0 18px 48px rgba(15,23,42,.09), 0 0 24px rgba(214,31,58,.04);
+}
+html[data-theme="light"] .student-premium .premium-stat-card:hover,
+html[data-theme="light"] .student-premium .analytics-card:hover,
+html[data-theme="light"] .student-premium .student-feature-card:hover,
+html[data-theme="light"] .student-premium .student-notice-board:hover { border-color: rgba(214,31,58,.24); box-shadow: 0 24px 58px rgba(15,23,42,.13); }
+html[data-theme="light"] .student-premium .premium-stat-card small { color: #64748b; }
+html[data-theme="light"] .student-premium .dashboard-ring {
+  background: radial-gradient(circle, #ffffff 50%, transparent 51%), conic-gradient(#f43f5e calc(var(--value) * 1%), #e2e8f0 0);
+  box-shadow: inset 0 0 0 12px #ffffff, inset 0 0 20px rgba(244,63,94,.12), 0 18px 38px rgba(15,23,42,.10);
+}
+html[data-theme="light"] .student-premium .marks-bars,
+html[data-theme="light"] .student-premium .weekly-activity {
+  background: linear-gradient(rgba(148,163,184,.13) 1px, transparent 1px), #f8fafc;
+  background-size: 100% 25%;
+  border-color: rgba(203,213,225,.76);
+}
+html[data-theme="light"] .student-premium .chart-bar-wrap,
+html[data-theme="light"] .student-premium .summary-bar-wrap { color: #64748b; }
+html[data-theme="light"] .student-premium .notice-item,
+html[data-theme="light"] .student-premium .note-resource,
+html[data-theme="light"] .student-premium .assignment-resource,
+html[data-theme="light"] .student-premium .mark-resource,
+html[data-theme="light"] .student-premium .news-resource,
+html[data-theme="light"] .student-premium .video-resource,
+html[data-theme="light"] .student-premium .accordion-item,
+html[data-theme="light"] .student-premium .premium-empty { color: #334155; background: #ffffff; border-color: rgba(203,213,225,.78); }
+html[data-theme="light"] .student-premium .note-resource:hover,
+html[data-theme="light"] .student-premium .assignment-resource:hover,
+html[data-theme="light"] .student-premium .mark-resource:hover,
+html[data-theme="light"] .student-premium .news-resource:hover,
+html[data-theme="light"] .student-premium .video-resource:hover,
+html[data-theme="light"] .student-premium .accordion-item:hover { background: #fff7f8; border-color: rgba(214,31,58,.24); }
+html[data-theme="light"] .student-premium .mini-button { color: #334155; background: #f8fafc; border-color: rgba(203,213,225,.86); }
+html[data-theme="light"] .student-premium .premium-empty { color: #64748b; }
 `;

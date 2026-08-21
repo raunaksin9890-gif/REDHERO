@@ -1661,4 +1661,113 @@ const operationsCenterStyles = `
   .ops-metric-row { grid-template-columns: 1fr; }
   .ops-table-wrap table { min-width: max-content; }
 }
+
+html[data-theme="light"] .operations-center {
+  color: #172033;
+  background:
+    radial-gradient(circle at 10% 0%, rgba(214,31,58,.10), transparent 30%),
+    radial-gradient(circle at 90% 8%, rgba(37,99,235,.08), transparent 28%),
+    linear-gradient(145deg, #f8fafc, #ffffff 52%, #f7f8fb);
+  border-color: rgba(203,213,225,.82);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.9), 0 24px 70px rgba(15,23,42,.08);
+}
+html[data-theme="light"] .operations-center .ops-page-head h1,
+html[data-theme="light"] .operations-center .ops-module-card strong,
+html[data-theme="light"] .operations-center .ops-panel h2,
+html[data-theme="light"] .operations-center .ops-card-value,
+html[data-theme="light"] .operations-center .ops-metric-deck strong,
+html[data-theme="light"] .operations-center .ops-subject-list strong,
+html[data-theme="light"] .operations-center .ops-installments strong,
+html[data-theme="light"] .operations-center .ops-timeline strong,
+html[data-theme="light"] .operations-center .ops-assignment-list strong,
+html[data-theme="light"] .operations-center .ops-panel-title-row h2,
+html[data-theme="light"] .operations-center .exam-taking-panel > header strong,
+html[data-theme="light"] .operations-center .exam-taking-panel h3,
+html[data-theme="light"] .operations-center .exam-evaluation strong,
+html[data-theme="light"] .operations-center .ops-period strong,
+html[data-theme="light"] .operations-center .empty-state strong { color: #172033; }
+html[data-theme="light"] .operations-center .ops-page-head p,
+html[data-theme="light"] .operations-center .ops-module-card header span,
+html[data-theme="light"] .operations-center .ops-module-card .ops-metric-row span,
+html[data-theme="light"] .operations-center .ops-panel small,
+html[data-theme="light"] .operations-center .ops-metric-deck span,
+html[data-theme="light"] .operations-center .ops-donut span,
+html[data-theme="light"] .operations-center .ops-bars span,
+html[data-theme="light"] .operations-center .ops-subject-list span,
+html[data-theme="light"] .operations-center .ops-installments article,
+html[data-theme="light"] .operations-center .ops-timeline div,
+html[data-theme="light"] .operations-center .ops-assignment-list span,
+html[data-theme="light"] .operations-center .ops-assignment-list small,
+html[data-theme="light"] .operations-center .exam-taking-panel > header span,
+html[data-theme="light"] .operations-center .exam-evaluation span,
+html[data-theme="light"] .operations-center .exam-evaluation small,
+html[data-theme="light"] .operations-center .ops-period span,
+html[data-theme="light"] .operations-center .ops-period small,
+html[data-theme="light"] .operations-center .empty-state { color: #64748b; }
+html[data-theme="light"] .operations-center .ops-module-card,
+html[data-theme="light"] .operations-center .ops-panel,
+html[data-theme="light"] .operations-center .ops-metric-deck article,
+html[data-theme="light"] .operations-center .exam-taking-panel,
+html[data-theme="light"] .operations-center .exam-evaluation {
+  border-color: rgba(203,213,225,.82);
+  background: linear-gradient(180deg, rgba(255,255,255,.98), rgba(248,250,252,.94));
+  box-shadow: 0 18px 48px rgba(15,23,42,.08);
+}
+html[data-theme="light"] .operations-center .ops-metric-row span,
+html[data-theme="light"] .operations-center .ops-subject-list span,
+html[data-theme="light"] .operations-center .ops-installments article,
+html[data-theme="light"] .operations-center .ops-timeline div,
+html[data-theme="light"] .operations-center .ops-assignment-list > article,
+html[data-theme="light"] .operations-center .exam-question-form,
+html[data-theme="light"] .operations-center .exam-taking-panel article,
+html[data-theme="light"] .operations-center .exam-evaluation article {
+  background: #f8fafc;
+  border-color: rgba(203,213,225,.76);
+}
+html[data-theme="light"] .operations-center .ops-chart,
+html[data-theme="light"] .operations-center .ops-bars {
+  background: linear-gradient(180deg, #ffffff, #f8fafc);
+  border-color: rgba(203,213,225,.76);
+}
+html[data-theme="light"] .operations-center .ops-chart::before,
+html[data-theme="light"] .operations-center .ops-bars::before {
+  background-image: linear-gradient(rgba(148,163,184,.13) 1px, transparent 1px), linear-gradient(90deg, rgba(148,163,184,.13) 1px, transparent 1px);
+}
+html[data-theme="light"] .operations-center .ops-donut { box-shadow: inset 0 0 0 22px #ffffff, 0 16px 38px rgba(15,23,42,.10); }
+html[data-theme="light"] .operations-center .ops-donut strong { color: #172033; }
+html[data-theme="light"] .operations-center .ops-table-wrap {
+  background: #ffffff;
+  border-color: rgba(203,213,225,.82);
+}
+html[data-theme="light"] .operations-center .ops-table-wrap th,
+html[data-theme="light"] .operations-center .ops-table-wrap td { color: #334155; border-bottom-color: rgba(203,213,225,.68); }
+html[data-theme="light"] .operations-center .ops-table-wrap th { color: #64748b; background: #f1f5f9; }
+html[data-theme="light"] .operations-center .ops-table-wrap tr:hover td { background: #fff7f8; }
+html[data-theme="light"] .operations-center .ops-tools,
+html[data-theme="light"] .operations-center .ops-tabs button {
+  color: #64748b;
+  background: #ffffff;
+  border-color: rgba(203,213,225,.82);
+}
+html[data-theme="light"] .operations-center .ops-tools input,
+html[data-theme="light"] .operations-center .ops-actions input,
+html[data-theme="light"] .operations-center .ops-actions select,
+html[data-theme="light"] .operations-center .ops-form input,
+html[data-theme="light"] .operations-center .ops-form select,
+html[data-theme="light"] .operations-center .ops-form textarea,
+html[data-theme="light"] .operations-center .ops-inline-edit input,
+html[data-theme="light"] .operations-center .ops-inline-edit textarea,
+html[data-theme="light"] .operations-center .ops-submit-form input,
+html[data-theme="light"] .operations-center .exam-taking-panel textarea,
+html[data-theme="light"] .operations-center .exam-evaluation textarea {
+  color: #172033;
+  background: #ffffff;
+  border-color: rgba(203,213,225,.9);
+}
+html[data-theme="light"] .operations-center .ops-soft-button { color: #334155; background: #ffffff; border-color: rgba(203,213,225,.9); }
+html[data-theme="light"] .operations-center .ops-tabs button.active,
+html[data-theme="light"] .operations-center .exam-options button.active { color: #ffffff; background: linear-gradient(135deg, #d61f3a, #8f1026); }
+html[data-theme="light"] .operations-center .exam-options button { color: #334155; background: #ffffff; border-color: rgba(203,213,225,.9); }
+html[data-theme="light"] .operations-center .ops-period { background: linear-gradient(135deg, rgba(219,234,254,.84), rgba(255,241,242,.90)); border-color: rgba(203,213,225,.82); }
+html[data-theme="light"] .operations-center .inline-message { color: #172033; background: #ffffff; border-color: rgba(214,31,58,.24); }
 `;

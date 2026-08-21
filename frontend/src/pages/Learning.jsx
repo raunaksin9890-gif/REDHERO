@@ -1019,4 +1019,94 @@ const learningHubStyles = `
   .mini-thumb { height: 58px; }
   .editing-item { grid-template-columns: 1fr; }
 }
+
+html[data-theme="light"] .learning-hub {
+  color: #172033;
+  background:
+    radial-gradient(circle at 16% 8%, rgba(214,31,58,.10), transparent 30%),
+    radial-gradient(circle at 84% 10%, rgba(14,165,233,.08), transparent 28%),
+    linear-gradient(145deg, #f8fafc, #ffffff 48%, #f7f9fc);
+  border: 1px solid rgba(203,213,225,.78);
+  box-shadow: 0 24px 70px rgba(15,23,42,.08);
+}
+html[data-theme="light"] .learning-hub .learning-title-row h1,
+html[data-theme="light"] .learning-hub .detail-head h1,
+html[data-theme="light"] .learning-hub .learning-card h2,
+html[data-theme="light"] .learning-hub .learning-count,
+html[data-theme="light"] .learning-hub .resource-list-panel h2,
+html[data-theme="light"] .learning-hub .video-list-panel h2,
+html[data-theme="light"] .learning-hub .publish-panel h2,
+html[data-theme="light"] .learning-hub .resource-list-item,
+html[data-theme="light"] .learning-hub .video-row,
+html[data-theme="light"] .learning-hub .selected-resource h2,
+html[data-theme="light"] .learning-hub .detail-section h3,
+html[data-theme="light"] .learning-hub .meta-tile strong,
+html[data-theme="light"] .learning-hub .empty-state strong { color: #172033; }
+html[data-theme="light"] .learning-hub .learning-title-row p,
+html[data-theme="light"] .learning-hub .detail-head p,
+html[data-theme="light"] .learning-hub .learning-card p,
+html[data-theme="light"] .learning-hub .resource-list-item small,
+html[data-theme="light"] .learning-hub .video-row small,
+html[data-theme="light"] .learning-hub .video-row em,
+html[data-theme="light"] .learning-hub .selected-resource p,
+html[data-theme="light"] .learning-hub .muted-line,
+html[data-theme="light"] .learning-hub .meta-tile span,
+html[data-theme="light"] .learning-hub .empty-state { color: #64748b; }
+html[data-theme="light"] .learning-hub .student-pill,
+html[data-theme="light"] .learning-hub .learning-card,
+html[data-theme="light"] .learning-hub .resource-list-panel,
+html[data-theme="light"] .learning-hub .resource-detail-panel,
+html[data-theme="light"] .learning-hub .video-list-panel,
+html[data-theme="light"] .learning-hub .video-player-panel,
+html[data-theme="light"] .learning-hub .publish-panel {
+  color: #172033;
+  border-color: rgba(203,213,225,.82);
+  background: linear-gradient(145deg, rgba(255,255,255,.98), rgba(248,250,252,.94));
+  box-shadow: 0 20px 56px rgba(15,23,42,.09);
+}
+html[data-theme="light"] .learning-hub .student-pill span { color: #172033; }
+html[data-theme="light"] .learning-hub .student-pill strong { color: #64748b; }
+html[data-theme="light"] .learning-hub .learning-card {
+  border-color: color-mix(in srgb, var(--course-accent), transparent 68%);
+  background:
+    radial-gradient(circle at 8% 0%, color-mix(in srgb, var(--course-accent), transparent 88%), transparent 38%),
+    linear-gradient(145deg, rgba(255,255,255,.98), rgba(248,250,252,.94));
+}
+html[data-theme="light"] .learning-hub .count-ring { background: radial-gradient(circle at center, #ffffff 52%, transparent 53%), conic-gradient(var(--course-accent) 75%, #e2e8f0 0); }
+html[data-theme="light"] .learning-hub .count-ring strong { color: #172033; }
+html[data-theme="light"] .learning-hub .detail-head { border-bottom-color: rgba(203,213,225,.82); }
+html[data-theme="light"] .learning-hub .back-link,
+html[data-theme="light"] .learning-hub .filter-button,
+html[data-theme="light"] .learning-hub .secondary,
+html[data-theme="light"] .learning-hub .icon-button {
+  color: #334155;
+  background: #ffffff;
+  border-color: rgba(203,213,225,.9);
+}
+html[data-theme="light"] .learning-hub .detail-search,
+html[data-theme="light"] .learning-hub .resource-list-item,
+html[data-theme="light"] .learning-hub .video-row,
+html[data-theme="light"] .learning-hub .detail-section,
+html[data-theme="light"] .learning-hub .manage-card {
+  color: #172033;
+  background: #f8fafc;
+  border-color: rgba(203,213,225,.76);
+}
+html[data-theme="light"] .learning-hub .resource-list-item.active,
+html[data-theme="light"] .learning-hub .video-row.active { background: #fff1f2; border-color: rgba(214,31,58,.46); }
+html[data-theme="light"] .learning-hub .resource-list-item > span { color: #334155; background: #e2e8f0; }
+html[data-theme="light"] .learning-hub .detail-search input,
+html[data-theme="light"] .learning-hub input,
+html[data-theme="light"] .learning-hub select,
+html[data-theme="light"] .learning-hub textarea {
+  color: #172033;
+  background: #ffffff;
+  border-color: rgba(203,213,225,.9);
+}
+html[data-theme="light"] .learning-hub .detail-search input { background: transparent; }
+html[data-theme="light"] .learning-hub input::placeholder,
+html[data-theme="light"] .learning-hub textarea::placeholder { color: #94a3b8; }
+html[data-theme="light"] .learning-hub .selected-resource header { border-bottom-color: rgba(203,213,225,.76); }
+html[data-theme="light"] .learning-hub .selected-resource header span { color: #9d1430; background: #fff1f2; }
+html[data-theme="light"] .learning-hub .manage-card > span { color: #475569; }
 `;
