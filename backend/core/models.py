@@ -203,6 +203,10 @@ class Video(Document):
     chapter = StringField(required=True)
     description = StringField(default="")
     youtube_url = StringField(required=True)
+    file_name = StringField(default="")
+    file_type = StringField(default="")
+    file_size = IntField(default=0)
+    storage_name = StringField(default="")
     uploaded_by = ReferenceField(User, required=True)
     created_at = DateTimeField(default=datetime.utcnow)
 
@@ -215,6 +219,10 @@ class Note(Document):
     subject = StringField(required=True)
     chapter = StringField(required=True)
     pdf_url = StringField(required=True)
+    file_name = StringField(default="")
+    file_type = StringField(default="")
+    file_size = IntField(default=0)
+    storage_name = StringField(default="")
     uploaded_by = ReferenceField(User, required=True)
     created_at = DateTimeField(default=datetime.utcnow)
 
