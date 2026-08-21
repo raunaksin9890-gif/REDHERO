@@ -6,6 +6,7 @@ import { useAuth } from "../components/AuthProvider.jsx";
 import { EmptyState, useToast } from "../components/UX.jsx";
 
 const ISSUE_TYPES = ["Login Issue", "Learning Issue", "Operations Issue", "AI Tutor Issue", "Technical Issue", "Feedback", "Other"];
+const STATUS_OPTIONS = ["New", "In Review", "Resolved"];
 const ERROR_MESSAGE = "Unable to send your message right now. Please try again later.";
 
 export function ContactUs() {
@@ -37,6 +38,7 @@ export function ContactUs() {
     api("/contact-messages/").then((result) => setItems(result.results || [])).catch(() => setItems([]));
   }, []);
 
+  if (user.role === "super_admin") return <AdminContactMessages items={items} setItems={setItems} />;
   if (user.role !== "student") return <Navigate to="/403" replace />;
 
   function validate() {
@@ -127,6 +129,78 @@ export function ContactUs() {
       </div>
     </section>
   );
+}
+
+function AdminContactMessages({ items, setItems }) {
+  const [busyId, setBusyId] = useState("");
+  const [message, setMessage] = useState("");
+  const toast = useToast();
+
+  async function updateStatus(item, statusValue) {
+    const previous = items;
+    setBusyId(item.id);
+    setMessage("");
+    setItems((current) => current.map((row) => row.id === item.id ? { ...row, status: statusValue } : row));
+    try {
+      const result = await api("/contact-messages/", { method: "PUT", body: JSON.stringify({ id: item.id, status: statusValue }) });
+      setItems((current) => current.map((row) => row.id === item.id ? result.message : row));
+      toast?.show("Contact request updated.");
+    } catch (err) {
+      setItems(previous);
+      setMessage(err.message || "Unable to update contact request.");
+      toast?.show(err.message || "Unable to update contact request.", "error");
+    } finally {
+      setBusyId("");
+    }
+  }
+
+  return (
+    <section className="contact-page">
+      <style>{contactStyles}</style>
+      <section className="panel contact-history-panel admin-contact-panel">
+        <h2>Contact Messages</h2>
+        <div className="admin-contact-table">
+          <table>
+            <thead>
+              <tr>
+                <th>Student</th>
+                <th>Issue</th>
+                <th>Message</th>
+                <th>Rating</th>
+                <th>Feedback</th>
+                <th>Date</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((item) => (
+                <tr key={item.id}>
+                  <td><strong>{item.name || "-"}</strong><span>{item.student_id || "-"}</span><span>{item.email || "-"}</span></td>
+                  <td>{item.issue_type}</td>
+                  <td>{item.message}</td>
+                  <td>{item.rating || "-"}</td>
+                  <td>{item.feedback || "-"}</td>
+                  <td>{formatContactDate(item.created_at)}</td>
+                  <td>
+                    <select value={item.status || "New"} disabled={busyId === item.id} onChange={(event) => updateStatus(item, event.target.value)}>
+                      {STATUS_OPTIONS.map((statusValue) => <option key={statusValue} value={statusValue}>{statusValue}</option>)}
+                    </select>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+          {items.length === 0 && <EmptyState title="No contact requests yet" message="Student submitted requests will appear here." />}
+        </div>
+        {message && <div className="contact-message">{message}</div>}
+      </section>
+    </section>
+  );
+}
+
+function formatContactDate(value) {
+  if (!value) return "-";
+  return new Date(value).toLocaleString("en-IN", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" });
 }
 
 const contactStyles = `
@@ -302,6 +376,58 @@ const contactStyles = `
 }
 .contact-page .empty-state strong {
   color: #ffffff;
+}
+.admin-contact-panel {
+  display: grid;
+  gap: 12px;
+}
+.admin-contact-table {
+  overflow: auto;
+  border: 1px solid rgba(255,255,255,.10);
+  border-radius: 18px;
+  background: rgba(9,11,17,.52);
+}
+.admin-contact-table table {
+  width: 100%;
+  border-collapse: collapse;
+  min-width: 980px;
+}
+.admin-contact-table th,
+.admin-contact-table td {
+  padding: 12px;
+  border-bottom: 1px solid rgba(255,255,255,.10);
+  color: #f8fafc;
+  text-align: left;
+  vertical-align: top;
+}
+.admin-contact-table th {
+  color: #0f172a;
+  font-size: 12px;
+  text-transform: uppercase;
+}
+.admin-contact-table td strong {
+  color: #ffffff;
+}
+.admin-contact-table td span {
+  display: block;
+  margin-top: 4px;
+  color: #cbd5e1;
+  font-size: 12px;
+}
+.admin-contact-table tbody tr:hover td {
+  color: #111827;
+}
+.admin-contact-table tbody tr:hover td strong {
+  color: #111827;
+}
+.admin-contact-table tbody tr:hover td span {
+  color: #374151;
+}
+.admin-contact-table select {
+  min-width: 128px;
+  color: #f8fafc;
+  background: rgba(10,12,18,.58);
+  border-color: rgba(255,255,255,.12);
 }
 @keyframes contactPageIn { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: translateY(0); } }
 @media (max-width: 980px) {

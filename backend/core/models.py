@@ -146,9 +146,26 @@ class Fee(Document):
     class_level = StringField(required=True, unique=True, choices=CLASSES)
     annual_fee = FloatField(required=True)
     installments = DictField(default=dict)
+    due_date = DateTimeField()
     updated_at = DateTimeField(default=datetime.utcnow)
 
     meta = {"collection": "Fees"}
+
+
+class FeePayment(Document):
+    student = ReferenceField(Student, required=True, reverse_delete_rule=2)
+    class_level = StringField(required=True, choices=CLASSES)
+    amount = FloatField(required=True, min_value=0)
+    payment_date = DateTimeField(required=True, default=datetime.utcnow)
+    payment_mode = StringField(default="Cash", choices=["Cash", "UPI", "Bank Transfer", "Cheque", "Other"])
+    reference = StringField(default="")
+    installment = StringField(default="")
+    note = StringField(default="")
+    recorded_by = ReferenceField(User, required=True)
+    created_at = DateTimeField(default=datetime.utcnow)
+    updated_at = DateTimeField(default=datetime.utcnow)
+
+    meta = {"collection": "FeePayments", "indexes": ["student", "class_level", "-payment_date", "recorded_by"]}
 
 
 class Blog(Document):
@@ -221,8 +238,10 @@ class Assignment(Document):
     class_level = StringField(required=True, choices=CLASSES)
     subject = StringField(required=True)
     deadline = DateTimeField(required=True)
+    file_url = StringField(default="")
     created_by = ReferenceField(User, required=True)
     created_at = DateTimeField(default=datetime.utcnow)
+    updated_at = DateTimeField(default=datetime.utcnow)
 
     meta = {"collection": "Assignments", "indexes": ["class_level", "deadline"]}
 
@@ -232,7 +251,9 @@ class AssignmentSubmission(Document):
     student = ReferenceField(Student, required=True, reverse_delete_rule=2)
     answer_text = StringField(default="")
     file_url = StringField(default="")
+    status = StringField(default="submitted", choices=["submitted", "late", "reviewed"])
     submitted_at = DateTimeField(default=datetime.utcnow)
+    updated_at = DateTimeField(default=datetime.utcnow)
 
     meta = {"collection": "AssignmentSubmissions", "indexes": ["assignment", "student"]}
 
@@ -363,10 +384,18 @@ class StudentMistake(Document):
     source = StringField(default="practice", choices=["practice", "exam"])
     subject = StringField(required=True)
     chapter = StringField(required=True)
+    last_answer = StringField(default="")
+    correct_answer = StringField(default="")
+    explanation = StringField(default="")
     wrong_attempts = IntField(default=0)
+    retry_attempts = IntField(default=0)
     correct_streak = IntField(default=0)
     resolved = BooleanField(default=False)
     last_wrong_at = DateTimeField()
+    last_retry_at = DateTimeField()
+    last_retry_answer = StringField(default="")
+    last_retry_correct = BooleanField(default=False)
+    corrected_at = DateTimeField()
     updated_at = DateTimeField(default=datetime.utcnow)
 
     meta = {"collection": "StudentMistakes", "indexes": ["student", "question", "subject", "chapter", "resolved", "-last_wrong_at"]}
@@ -392,8 +421,12 @@ class StudyPlanTask(EmbeddedDocument):
     category = StringField(default="Practice")
     subject = StringField(default="")
     chapter = StringField(default="")
+    reason = StringField(default="")
     minutes = IntField(default=20)
     link = StringField(default="")
+    source_key = StringField(default="")
+    scope = StringField(default="today", choices=["today", "week"])
+    status = StringField(default="Pending", choices=["Pending", "Completed", "Skipped"])
     completed = BooleanField(default=False)
     completed_at = DateTimeField()
 

@@ -57,7 +57,7 @@ function assertFrontendPermission(path, method) {
     { pattern: /^\/practice\/study-plan\/tasks\/[^/]+\/complete\//, roles: ["student"] },
     { pattern: /^\/practice\//, roles: ["super_admin", "teacher", "student"] },
     { pattern: /^\/exams\/[^/]+\/(start)\//, roles: ["student"] },
-    { pattern: /^\/exams\/[^/]+\/(questions|publish-results)\//, roles: ["super_admin", "teacher"] },
+    { pattern: /^\/exams\/[^/]+\/(questions|publish-results|duplicate)\//, roles: ["super_admin", "teacher"] },
     { pattern: /^\/exams\//, roles: ["super_admin", "teacher"] },
     { pattern: /^\/exam-attempts\/[^/]+\/(answers|submit|violation)\//, roles: ["student"] },
     { pattern: /^\/exam-attempts\/[^/]+\/evaluate\//, roles: ["super_admin", "teacher"] },
@@ -79,7 +79,11 @@ export async function api(path, options = {}) {
   if (token) headers.Authorization = `Bearer ${token}`;
   const response = await fetch(`${API_URL}${path}`, { ...options, headers });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.detail || "RedHero request failed");
+  if (!response.ok) {
+    const error = new Error(data.detail || "RedHero request failed");
+    error.data = data;
+    throw error;
+  }
   return data;
 }
 

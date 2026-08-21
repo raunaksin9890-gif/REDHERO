@@ -416,7 +416,6 @@ const aiTutorPremiumStyles = `
     min-height: 360px;
   }
 }
-
 html[data-theme="light"] .ai-tutor-page {
   color: #172033;
   background:
@@ -468,4 +467,21 @@ html[data-theme="light"] .ai-tutor-page .ai-chat-panel select {
   border-color: rgba(203,213,225,.9);
 }
 html[data-theme="light"] .ai-tutor-page .ai-chat-panel input::placeholder { color: #94a3b8; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ai-tutor-page *,
+  .ai-tutor-page *::before,
+  .ai-tutor-page *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+  }
+  .ai-orb,
+  .ai-kinetic span,
+  .typing-bubble span {
+    animation: none !important;
+    opacity: 1;
+    transform: none;
+  }
+}
 `;

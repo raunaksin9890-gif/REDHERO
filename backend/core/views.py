@@ -25,6 +25,7 @@ from .models import (
     Blog,
     ChatHistory,
     ChatMessage,
+    CLASSES,
     ContactMessage,
     CurrentAffair,
     Fee,
@@ -740,6 +741,79 @@ def class_scoped_query(request, model):
     return user, query
 
 
+def teacher_subjects(user):
+    teacher = get_teacher_for_user(user)
+    return teacher.subjects if teacher else []
+
+
+def enforce_teacher_subject(user, subject):
+    subjects = [item.lower() for item in teacher_subjects(user)]
+    if user.role == ROLE_TEACHER and subjects and str(subject).lower() not in subjects:
+        raise ValueError("Teachers can only manage assigned subjects")
+
+
+def assignment_submission_json(submission, include_student=False):
+    if not submission:
+        return None
+    data = {
+        **simple_json(submission, ["answer_text", "file_url", "status", "submitted_at", "updated_at"]),
+    }
+    if include_student:
+        data["student"] = student_json(submission.student) if submission.student else None
+    return data
+
+
+def assignment_status_for(assignment, student=None):
+    own_submission = AssignmentSubmission.objects(assignment=assignment, student=student).first() if student else None
+    if own_submission:
+        return "Completed" if own_submission.status == "reviewed" else "Submitted"
+    return "Overdue" if datetime.utcnow() > assignment.deadline else "Pending"
+
+
+def assignment_manager_status(assignment, submission_count):
+    if submission_count > 0:
+        return "Submitted"
+    return "Overdue" if datetime.utcnow() > assignment.deadline else "Pending"
+
+
+def assignment_json(row, user):
+    student = get_student_for_user(user) if user.role == ROLE_STUDENT else None
+    data = simple_json(row, ["title", "description", "class_level", "subject", "deadline", "file_url", "created_at", "updated_at"])
+    data["status"] = assignment_status_for(row, student if user.role == ROLE_STUDENT else None)
+    return data
+
+
+def assignment_payload(data, user, row=None):
+    class_level = str(data.get("class_level", row.class_level if row else ""))
+    if class_level not in CLASSES:
+        raise ValueError("Select a valid class.")
+    enforce_teacher_class(user, class_level)
+    subject = str(data.get("subject", row.subject if row else "")).strip()
+    if not subject:
+        raise ValueError("Subject is required.")
+    enforce_teacher_subject(user, subject)
+    title = str(data.get("title", row.title if row else "")).strip()
+    description = str(data.get("description", row.description if row else "")).strip()
+    if not title:
+        raise ValueError("Assignment title is required.")
+    if not description:
+        raise ValueError("Description is required.")
+    if not row and not data.get("deadline"):
+        raise ValueError("Due date and due time are required.")
+    try:
+        deadline = parse_date(data.get("deadline", row.deadline if row else None))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Due date/time must be valid.") from exc
+    return {
+        "title": title,
+        "description": description,
+        "class_level": class_level,
+        "subject": subject,
+        "deadline": deadline,
+        "file_url": str(data.get("file_url", row.file_url if row else "")).strip(),
+    }
+
+
 @api_view(["GET", "POST", "PUT", "DELETE"])
 def notices(request):
     user, query = class_scoped_query(request, Notice)
@@ -901,6 +975,15 @@ def contact_messages(request):
     except (TypeError, ValueError, ValidationError) as exc:
         logger.warning("Contact message validation failed: %s", exc)
         return bad(CONTACT_ERROR)
+    notify_admins(
+        "contact_message",
+        "Contact Message",
+        f"{row.student_id} submitted {row.issue_type}: {row.message[:180]}",
+        target_url="/contact-us",
+        tone="red",
+        icon="bell",
+        related_object_id=row.id,
+    )
     return ok({"message": "Your message has been sent successfully.", "contact": contact_message_json(row)}, status.HTTP_201_CREATED)
 
 
@@ -1088,20 +1171,19 @@ def assignments(request):
         student = get_student_for_user(user) if user.role == ROLE_STUDENT else None
         results = []
         for row in query.order_by("deadline"):
-            item = simple_json(row, ["title", "description", "class_level", "subject", "deadline", "created_at"])
+            item = simple_json(row, ["title", "description", "class_level", "subject", "deadline", "file_url", "created_at", "updated_at"])
+            item["status"] = assignment_status_for(row, student if user.role == ROLE_STUDENT else None)
             submissions = AssignmentSubmission.objects(assignment=row).order_by("-submitted_at")
             if user.role == ROLE_STUDENT:
                 own_submission = AssignmentSubmission.objects(assignment=row, student=student).first() if student else None
-                item["own_submission"] = simple_json(own_submission, ["answer_text", "file_url", "submitted_at"]) if own_submission else None
+                item["own_submission"] = assignment_submission_json(own_submission) if own_submission else None
             else:
                 item["submission_count"] = submissions.count()
                 item["submissions"] = [
-                    {
-                        **simple_json(submission, ["answer_text", "file_url", "submitted_at"]),
-                        "student": student_json(submission.student) if submission.student else None,
-                    }
+                    assignment_submission_json(submission, include_student=True)
                     for submission in submissions
                 ]
+                item["status"] = assignment_manager_status(row, item["submission_count"])
             results.append(item)
         return ok({"results": results})
     require_roles(request, [ROLE_ADMIN, ROLE_TEACHER])
@@ -1115,26 +1197,19 @@ def assignments(request):
             row.delete()
             return ok({"message": "Assignment deleted"})
         data = request.data
-        class_level = str(data.get("class_level", row.class_level))
-        enforce_teacher_class(user, class_level)
-        row.update(
-            title=data.get("title", row.title),
-            description=data.get("description", row.description),
-            class_level=class_level,
-            subject=data.get("subject", row.subject),
-            deadline=parse_date(data.get("deadline", row.deadline)),
-        )
-        return ok({"assignment": simple_json(Assignment.objects(id=row.id).first(), ["title", "description", "class_level", "subject", "deadline", "created_at"])})
+        try:
+            payload = assignment_payload(data, user, row)
+        except ValueError as exc:
+            return bad(str(exc))
+        payload["updated_at"] = datetime.utcnow()
+        row.update(**payload)
+        return ok({"assignment": assignment_json(Assignment.objects(id=row.id).first(), user)})
     data = request.data
-    enforce_teacher_class(user, str(data.get("class_level")))
-    row = Assignment(
-        title=data.get("title"),
-        description=data.get("description"),
-        class_level=str(data.get("class_level")),
-        subject=data.get("subject"),
-        deadline=parse_date(data.get("deadline")),
-        created_by=user,
-    ).save()
+    try:
+        payload = assignment_payload(data, user)
+    except ValueError as exc:
+        return bad(str(exc))
+    row = Assignment(**payload, created_by=user).save()
     notify_students_for_class(
         row.class_level,
         "assignment",
@@ -1145,7 +1220,7 @@ def assignments(request):
         "assignment",
         row.id,
     )
-    return ok({"assignment": simple_json(row, ["title", "description", "class_level", "subject", "deadline", "created_at"])}, status.HTTP_201_CREATED)
+    return ok({"assignment": assignment_json(row, user)}, status.HTTP_201_CREATED)
 
 
 @api_view(["POST"])
@@ -1153,15 +1228,19 @@ def assignment_submit(request, assignment_id):
     user = require_roles(request, [ROLE_STUDENT])
     student = get_student_for_user(user)
     assignment = Assignment.objects(id=assignment_id).first()
-    if not assignment or assignment.class_level != student.class_level:
+    if not assignment or not student or assignment.class_level != student.class_level:
         return bad("Assignment not found", status.HTTP_404_NOT_FOUND)
-    row = AssignmentSubmission(
-        assignment=assignment,
-        student=student,
-        answer_text=request.data.get("answer_text", ""),
-        file_url=request.data.get("file_url", ""),
-    ).save()
-    return ok({"submission": simple_json(row, ["answer_text", "file_url", "submitted_at"])}, status.HTTP_201_CREATED)
+    status_value = "late" if datetime.utcnow() > assignment.deadline else "submitted"
+    row = AssignmentSubmission.objects(assignment=assignment, student=student).modify(
+        upsert=True,
+        new=True,
+        set__answer_text=request.data.get("answer_text", ""),
+        set__file_url=request.data.get("file_url", ""),
+        set__status=status_value,
+        set__submitted_at=datetime.utcnow(),
+        set__updated_at=datetime.utcnow(),
+    )
+    return ok({"submission": assignment_submission_json(row)}, status.HTTP_201_CREATED)
 
 
 @api_view(["GET"])

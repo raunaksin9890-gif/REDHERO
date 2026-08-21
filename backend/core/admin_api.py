@@ -5,7 +5,9 @@ from datetime import date, datetime, timedelta
 from uuid import uuid4
 
 from django.conf import settings
+from django.http import HttpResponse
 from mongoengine.errors import NotUniqueError, ValidationError
+from openpyxl import load_workbook
 from rest_framework import status
 from rest_framework.decorators import api_view
 from rest_framework.exceptions import PermissionDenied
@@ -13,8 +15,10 @@ from rest_framework.response import Response
 
 from .models import (
     Assignment,
+    AssignmentSubmission,
     Attendance,
     Blog,
+    CLASSES,
     CurrentAffair,
     DEFAULT_PASSWORD,
     Exam,
@@ -22,6 +26,7 @@ from .models import (
     ExamAttempt,
     ExamQuestion,
     Fee,
+    FeePayment,
     Marks,
     Note,
     NoteBookmark,
@@ -262,6 +267,87 @@ def notice_json(row):
 
 def timetable_json(row):
     return {"id": oid(row), "class_level": row.class_level, "periods": [period.to_mongo().to_dict() for period in row.periods]}
+
+
+def assignment_submission_json(submission, include_student=False):
+    data = {
+        "id": oid(submission),
+        "answer_text": submission.answer_text,
+        "file_url": submission.file_url,
+        "status": submission.status,
+        "submitted_at": dt(submission.submitted_at),
+        "updated_at": dt(getattr(submission, "updated_at", None)),
+    }
+    if include_student:
+        data["student"] = student_json(submission.student) if submission.student else None
+    return data
+
+
+def assignment_status_for(row, student=None):
+    submission = AssignmentSubmission.objects(assignment=row, student=student).first() if student else None
+    if submission:
+        return "Completed" if submission.status == "reviewed" else "Submitted"
+    return "Overdue" if row.deadline and row.deadline < datetime.utcnow() else "Pending"
+
+
+def assignment_manager_status(row, submission_count):
+    if submission_count:
+        return "Submitted"
+    return "Overdue" if row.deadline and row.deadline < datetime.utcnow() else "Pending"
+
+
+def assignment_json(row, user):
+    submissions = list(AssignmentSubmission.objects(assignment=row).order_by("-submitted_at"))
+    data = {
+        "id": oid(row),
+        "title": row.title,
+        "description": row.description,
+        "class_level": row.class_level,
+        "subject": row.subject,
+        "deadline": dt(row.deadline),
+        "file_url": getattr(row, "file_url", ""),
+        "created_at": dt(row.created_at),
+        "updated_at": dt(getattr(row, "updated_at", None)),
+        "created_by": user_json(row.created_by),
+        "submission_count": len(submissions),
+    }
+    if user.role == ROLE_STUDENT:
+        student = get_student_for_user(user)
+        own = AssignmentSubmission.objects(assignment=row, student=student).first() if student else None
+        data["own_submission"] = assignment_submission_json(own) if own else None
+        data["status"] = assignment_status_for(row, student)
+    else:
+        data["submissions"] = [assignment_submission_json(item, include_student=True) for item in submissions]
+        data["status"] = assignment_manager_status(row, len(submissions))
+    return data
+
+
+def assignment_payload(data, user, row=None):
+    class_level = str(data.get("class_level", row.class_level if row else "")).strip()
+    subject = str(data.get("subject", row.subject if row else "")).strip()
+    title = str(data.get("title", row.title if row else "")).strip()
+    description = str(data.get("description", row.description if row else "")).strip()
+    if class_level not in CLASSES:
+        raise ValueError("Select a valid class")
+    if not title:
+        raise ValueError("Assignment title is required")
+    if not subject:
+        raise ValueError("Subject is required")
+    if not description:
+        raise ValueError("Description is required")
+    if not row and not data.get("deadline"):
+        raise ValueError("Due date and due time are required")
+    enforce_teacher_class(user, class_level)
+    enforce_teacher_subject(user, subject)
+    return {
+        "title": title,
+        "description": description,
+        "class_level": class_level,
+        "subject": subject,
+        "deadline": parse_date(data.get("deadline", row.deadline if row else None)),
+        "file_url": str(data.get("file_url", getattr(row, "file_url", "") if row else "") or "").strip(),
+        "updated_at": datetime.utcnow(),
+    }
 
 
 def scoped_students(user):
@@ -781,42 +867,188 @@ def timetables(request):
     return ok({"timetable": timetable_json(row)})
 
 
+PAYMENT_MODES = ["Cash", "UPI", "Bank Transfer", "Cheque", "Other"]
+
+
+def fee_structure_json(row):
+    return {
+        **simple_json(row, ["class_level", "annual_fee", "installments", "updated_at"]),
+        "due_date": dt(getattr(row, "due_date", None)),
+    }
+
+
+def payment_json(row):
+    return {
+        "id": oid(row),
+        "student_id": row.student.student_id if row.student else "",
+        "student_name": row.student.name if row.student else "",
+        "class_level": row.class_level,
+        "amount": row.amount,
+        "payment_date": dt(row.payment_date),
+        "payment_mode": row.payment_mode,
+        "reference": row.reference,
+        "installment": row.installment,
+        "note": row.note,
+        "recorded_by": user_json(row.recorded_by),
+        "created_at": dt(row.created_at),
+    }
+
+
+def fee_status(total_fee, paid_amount, due_date):
+    pending = max(0, total_fee - paid_amount)
+    if pending <= 0:
+        return "Paid"
+    if due_date and datetime.utcnow().date() > due_date.date():
+        return "Overdue"
+    if paid_amount > 0:
+        return "Partial"
+    return "Pending"
+
+
+def fee_scope_for_user(user, requested_class=None):
+    if user.role == ROLE_STUDENT:
+        student = get_student_for_user(user)
+        return [student.class_level] if student else []
+    if user.role == ROLE_TEACHER:
+        assigned = teacher_classes(user)
+        return [requested_class] if requested_class in assigned else assigned
+    return [requested_class] if requested_class else None
+
+
+def fee_student_rows(user, structures, requested_status=""):
+    structure_map = {row.class_level: row for row in structures}
+    query = scoped_students(user)
+    if structure_map:
+        query = query(class_level__in=list(structure_map.keys()))
+    rows = []
+    summary = {"total_fees": 0, "paid": 0, "pending": 0, "overdue": 0}
+    for student in query.order_by("student_id"):
+        fee = structure_map.get(student.class_level)
+        if not fee:
+            continue
+        payments = list(FeePayment.objects(student=student).order_by("-payment_date"))
+        paid = sum(float(payment.amount or 0) for payment in payments)
+        total = float(fee.annual_fee or 0)
+        pending = max(0, total - paid)
+        status_value = fee_status(total, paid, getattr(fee, "due_date", None))
+        if requested_status and status_value.lower() != requested_status.lower():
+            continue
+        summary["total_fees"] += total
+        summary["paid"] += paid
+        summary["pending"] += pending
+        if status_value == "Overdue":
+            summary["overdue"] += pending
+        rows.append(
+            {
+                "student": student_json(student),
+                "class_level": student.class_level,
+                "total_fee": total,
+                "paid": paid,
+                "pending": pending,
+                "due_date": dt(getattr(fee, "due_date", None)),
+                "status": status_value,
+                "installments": fee.installments,
+                "payments": [payment_json(payment) for payment in payments],
+            }
+        )
+    return rows, summary
+
+
+def parse_installments(value):
+    if isinstance(value, dict):
+        return value
+    return {}
+
+
 @api_view(["GET", "POST", "DELETE"])
 def fees(request):
     user = current_user(request)
     if request.method == "GET":
-        class_level = request.GET.get("class_level")
-        if user.role == ROLE_STUDENT:
-            class_level = get_student_for_user(user).class_level
-        if user.role == ROLE_TEACHER:
-            assigned = teacher_classes(user)
-            rows = Fee.objects(class_level=class_level) if class_level in assigned else Fee.objects(class_level__in=assigned)
-        else:
-            rows = Fee.objects(class_level=class_level) if class_level else Fee.objects
-        return ok({"results": [simple_json(row, ["class_level", "annual_fee", "installments", "updated_at"]) for row in rows]})
+        requested_class = request.GET.get("class_level")
+        status_filter = request.GET.get("status", "")
+        scope = fee_scope_for_user(user, requested_class)
+        rows = Fee.objects(class_level__in=scope) if scope is not None else Fee.objects
+        structures = list(rows.order_by("class_level"))
+        student_rows, summary = fee_student_rows(user, structures, status_filter)
+        return ok(
+            {
+                "results": [fee_structure_json(row) for row in structures],
+                "student_records": student_rows,
+                "summary": summary,
+                "payment_modes": PAYMENT_MODES,
+            }
+        )
     require_roles(request, [ROLE_ADMIN])
     if request.method == "DELETE":
-        Fee.objects(id=request.data.get("id") or request.GET.get("id")).delete()
+        row = Fee.objects(id=request.data.get("id") or request.GET.get("id")).first()
+        if not row:
+            return bad("Fee structure not found", status.HTTP_404_NOT_FOUND)
+        if FeePayment.objects(class_level=row.class_level).first():
+            return bad("Cannot delete fee structure with payment history.")
+        row.delete()
         return ok({"message": "Fee structure deleted"})
     data = request.data
-    row = Fee.objects(class_level=str(data.get("class_level"))).modify(
+    class_level = str(data.get("class_level", ""))
+    if class_level not in [str(item) for item in range(6, 13)]:
+        return bad("Select a valid class.")
+    try:
+        annual_fee = float(data.get("annual_fee"))
+    except (TypeError, ValueError):
+        return bad("Annual fee must be a valid amount.")
+    if annual_fee <= 0:
+        return bad("Annual fee must be greater than 0.")
+    due_date = parse_date(data.get("due_date")) if data.get("due_date") else None
+    installments = parse_installments(data.get("installments", {}))
+    installment_total = sum(float(value or 0) for value in installments.values()) if installments else 0
+    if installments and abs(installment_total - annual_fee) > 0.01:
+        return bad("Installment totals must match annual fee.")
+    row = Fee.objects(class_level=class_level).modify(
         upsert=True,
         new=True,
-        set__annual_fee=float(data.get("annual_fee")),
-        set__installments=data.get("installments", {}),
+        set__annual_fee=annual_fee,
+        set__installments=installments,
+        set__due_date=due_date,
         set__updated_at=datetime.utcnow(),
     )
-    notify_students_for_class(
-        row.class_level,
-        "fee",
-        "Fee",
-        "Fee structure has been updated.",
-        "/operations",
-        "amber",
-        "fee",
-        row.id,
-    )
-    return ok({"fee": simple_json(row, ["class_level", "annual_fee", "installments", "updated_at"])})
+    notify_students_for_class(row.class_level, "fee", "Fee", "Fee structure has been updated.", "/operations", "amber", "fee", row.id)
+    return ok({"fee": fee_structure_json(row)})
+
+
+@api_view(["POST"])
+def fee_payments(request):
+    user = require_roles(request, [ROLE_ADMIN])
+    data = request.data
+    student = Student.objects(id=data.get("student") or data.get("student_id")).first()
+    if not student:
+        return bad("Student not found", status.HTTP_404_NOT_FOUND)
+    fee = Fee.objects(class_level=student.class_level).first()
+    if not fee:
+        return bad("Create a fee structure for this student's class first.")
+    try:
+        amount = float(data.get("amount"))
+    except (TypeError, ValueError):
+        return bad("Payment amount must be valid.")
+    if amount <= 0:
+        return bad("Payment amount must be greater than 0.")
+    paid = sum(float(payment.amount or 0) for payment in FeePayment.objects(student=student))
+    if paid + amount > float(fee.annual_fee or 0):
+        return bad("Payment amount cannot exceed pending fee.")
+    mode = data.get("payment_mode", "Cash")
+    if mode not in PAYMENT_MODES:
+        return bad("Select a valid payment mode.")
+    row = FeePayment(
+        student=student,
+        class_level=student.class_level,
+        amount=amount,
+        payment_date=parse_date(data.get("payment_date")) if data.get("payment_date") else datetime.utcnow(),
+        payment_mode=mode,
+        reference=data.get("reference", "").strip(),
+        installment=data.get("installment", "").strip(),
+        note=data.get("note", "").strip(),
+        recorded_by=user,
+    ).save()
+    notify_student(student, "fee_payment", "Fee Payment", f"Payment of Rs {amount:g} has been recorded.", "/operations", "green", "fee", row.id)
+    return ok({"payment": payment_json(row)}, status.HTTP_201_CREATED)
 
 
 @api_view(["GET", "POST", "PUT", "DELETE"])
@@ -900,7 +1132,7 @@ def current_affairs(request):
 def assignments(request):
     user, query = class_query(request, Assignment)
     if request.method == "GET":
-        return ok({"results": [simple_json(row, ["title", "description", "class_level", "subject", "deadline", "created_at"]) for row in query.order_by("deadline")]})
+        return ok({"results": [assignment_json(row, user) for row in query.order_by("deadline")]})
     require_roles(request, [ROLE_ADMIN, ROLE_TEACHER])
     data = request.data
     if request.method in ["PUT", "DELETE"]:
@@ -908,23 +1140,21 @@ def assignments(request):
         if not row:
             return bad("Assignment not found", status.HTTP_404_NOT_FOUND)
         enforce_teacher_class(user, row.class_level)
+        enforce_teacher_subject(user, row.subject)
         enforce_owner(user, row, "created_by")
         if request.method == "DELETE":
             row.delete()
             return ok({"message": "Assignment deleted"})
-        class_level = str(data.get("class_level", row.class_level))
-        enforce_teacher_class(user, class_level)
-        row.update(
-            title=data.get("title", row.title),
-            description=data.get("description", row.description),
-            class_level=class_level,
-            subject=data.get("subject", row.subject),
-            deadline=parse_date(data.get("deadline", row.deadline)),
-        )
-        return ok({"assignment": simple_json(Assignment.objects(id=row.id).first(), ["title", "description", "class_level", "subject", "deadline", "created_at"])})
-    class_level = str(data.get("class_level"))
-    enforce_teacher_class(user, class_level)
-    row = Assignment(title=data.get("title"), description=data.get("description"), class_level=class_level, subject=data.get("subject"), deadline=parse_date(data.get("deadline")), created_by=user).save()
+        try:
+            row.update(**assignment_payload(data, user, row))
+        except ValueError as exc:
+            return bad(str(exc))
+        return ok({"assignment": assignment_json(Assignment.objects(id=row.id).first(), user)})
+    try:
+        payload = assignment_payload(data, user)
+    except ValueError as exc:
+        return bad(str(exc))
+    row = Assignment(**payload, created_by=user).save()
     notify_students_for_class(
         row.class_level,
         "assignment",
@@ -935,7 +1165,33 @@ def assignments(request):
         "assignment",
         row.id,
     )
-    return ok({"assignment": simple_json(row, ["title", "description", "class_level", "subject", "deadline", "created_at"])}, status.HTTP_201_CREATED)
+    return ok({"assignment": assignment_json(row, user)}, status.HTTP_201_CREATED)
+
+
+@api_view(["POST"])
+def assignment_submit(request, assignment_id):
+    user = require_roles(request, [ROLE_STUDENT])
+    student = get_student_for_user(user)
+    row = Assignment.objects(id=assignment_id).first()
+    if not row:
+        return bad("Assignment not found", status.HTTP_404_NOT_FOUND)
+    if not student or student.class_level != row.class_level:
+        raise PermissionDenied("Students can only submit assignments for their class")
+    now = datetime.utcnow()
+    submission = AssignmentSubmission.objects(assignment=row, student=student).first()
+    fields = {
+        "answer_text": str(request.data.get("answer_text", "") or "").strip(),
+        "file_url": str(request.data.get("file_url", "") or "").strip(),
+        "status": "late" if row.deadline and row.deadline < now else "submitted",
+        "submitted_at": now,
+        "updated_at": now,
+    }
+    if submission:
+        submission.update(**fields)
+        submission = AssignmentSubmission.objects(id=submission.id).first()
+    else:
+        submission = AssignmentSubmission(assignment=row, student=student, **fields).save()
+    return ok({"submission": assignment_submission_json(submission)})
 
 
 def normalize_answer(value):
@@ -1036,16 +1292,28 @@ def exam_question_from_bank(question, order):
 
 
 def mistake_json(row):
+    question = row.question
+    correct_answer = row.correct_answer or (objective_correct_answer(question) if question and question.question_type in ["mcq", "true_false"] else getattr(question, "expected_answer", "")) or ""
+    explanation = row.explanation or (question.explanation if question else "")
     return {
         "id": oid(row),
-        "question": question_bank_json(row.question, include_correct=True) if row.question else None,
+        "question": question_bank_json(question, include_correct=True) if question else None,
         "source": row.source,
         "subject": row.subject,
         "chapter": row.chapter,
+        "student_answer": row.last_answer,
+        "correct_answer": correct_answer,
+        "explanation": explanation,
         "wrong_attempts": row.wrong_attempts,
+        "retry_attempts": getattr(row, "retry_attempts", 0),
         "correct_streak": row.correct_streak,
         "resolved": row.resolved,
+        "status": "Corrected" if row.resolved else "Needs Practice",
         "last_wrong_at": dt(row.last_wrong_at),
+        "last_retry_at": dt(getattr(row, "last_retry_at", None)),
+        "last_retry_answer": getattr(row, "last_retry_answer", ""),
+        "last_retry_correct": getattr(row, "last_retry_correct", False),
+        "corrected_at": dt(getattr(row, "corrected_at", None)),
         "updated_at": dt(row.updated_at),
     }
 
@@ -1061,10 +1329,11 @@ def topic_status(attempts, correct):
     return "Weak"
 
 
-def update_practice_tracking(student, question, correct, source="practice"):
+def update_practice_tracking(student, question, correct, source="practice", answer_text=""):
     if not question:
         return
     now = datetime.utcnow()
+    correct_answer = objective_correct_answer(question) if question.question_type in ["mcq", "true_false"] else question.expected_answer
     performance = TopicPerformance.objects(student=student, subject=question.subject, chapter=question.chapter).first()
     if performance:
         attempts = performance.attempts + 1
@@ -1092,11 +1361,14 @@ def update_practice_tracking(student, question, correct, source="practice"):
     if correct:
         if mistake:
             streak = mistake.correct_streak + 1
-            mistake.update(correct_streak=streak, resolved=streak >= 2, updated_at=now)
+            mistake.update(correct_streak=streak, resolved=streak >= 2, updated_at=now, corrected_at=now if streak >= 2 else mistake.corrected_at)
         return
     if mistake:
         mistake.update(
             source=source,
+            last_answer=answer_text,
+            correct_answer=correct_answer or "",
+            explanation=question.explanation or "",
             wrong_attempts=mistake.wrong_attempts + 1,
             correct_streak=0,
             resolved=False,
@@ -1110,6 +1382,9 @@ def update_practice_tracking(student, question, correct, source="practice"):
             source=source,
             subject=question.subject,
             chapter=question.chapter,
+            last_answer=answer_text,
+            correct_answer=correct_answer or "",
+            explanation=question.explanation or "",
             wrong_attempts=1,
             correct_streak=0,
             resolved=False,
@@ -1215,7 +1490,7 @@ def submit_practice_session(session):
         current["attempts"] += 1
         current["correct"] += 1 if is_correct else 0
         topic_map[key] = current
-        update_practice_tracking(session.student, question, is_correct, "practice")
+        update_practice_tracking(session.student, question, is_correct, "practice", answer.answer)
     topic_rows = []
     for row in topic_map.values():
         accuracy = round((row["correct"] / row["attempts"]) * 100, 2) if row["attempts"] else 0
@@ -1234,6 +1509,12 @@ def submit_practice_session(session):
         updated_at=now,
     )
     return PracticeSession.objects(id=session.id).first()
+
+
+def evaluate_practice_answer(question, answer):
+    if question.question_type in ["mcq", "true_false"]:
+        return normalize_answer(answer) == normalize_answer(objective_correct_answer(question))
+    return bool(question.expected_answer) and normalize_answer(answer) == normalize_answer(question.expected_answer)
 
 
 def topic_performance_json(row):
@@ -1259,63 +1540,154 @@ def learning_links_for(student, subject, chapter):
     return ""
 
 
+def study_task(source_key, title, category, subject="", chapter="", reason="", minutes=20, link="", scope="today"):
+    return StudyPlanTask(
+        task_id=uuid4().hex,
+        source_key=source_key,
+        title=title,
+        category=category,
+        subject=subject,
+        chapter=chapter,
+        reason=reason,
+        minutes=minutes,
+        link=link,
+        scope=scope,
+        status="Pending",
+    )
+
+
+def planner_candidates(student):
+    now = datetime.utcnow()
+    week_end = now + timedelta(days=7)
+    tasks = []
+
+    exams = Exam.objects(class_level=student.class_level, is_published=True, start_time__gte=now, start_time__lte=week_end).order_by("start_time")[:4]
+    for exam in exams:
+        attempt = ExamAttempt.objects(exam=exam, student=student).first()
+        if attempt and attempt.submitted_at:
+            continue
+        scope = "today" if exam.start_time.date() == now.date() else "week"
+        tasks.append(study_task(
+            f"exam:{oid(exam)}",
+            f"Prepare for {exam.name}",
+            "Exam",
+            exam.subject,
+            "",
+            f"Upcoming exam on {exam.start_time.strftime('%d %b')}",
+            35,
+            "/operations",
+            scope,
+        ))
+
+    assignments = Assignment.objects(class_level=student.class_level, deadline__gte=now, deadline__lte=week_end).order_by("deadline")[:5]
+    for assignment in assignments:
+        if AssignmentSubmission.objects(assignment=assignment, student=student).first():
+            continue
+        scope = "today" if assignment.deadline.date() == now.date() else "week"
+        tasks.append(study_task(
+            f"assignment:{oid(assignment)}",
+            f"Complete assignment: {assignment.title}",
+            "Assignment",
+            assignment.subject,
+            "",
+            f"Due {assignment.deadline.strftime('%d %b')}",
+            25,
+            "/operations",
+            scope,
+        ))
+
+    weak_rows = TopicPerformance.objects(student=student, status__in=["Weak", "Needs Practice"]).order_by("accuracy", "-attempts")[:4]
+    for row in weak_rows:
+        tasks.append(study_task(
+            f"weak:{row.subject}:{row.chapter}",
+            f"Revise {row.chapter}",
+            "Weak Topic",
+            row.subject,
+            row.chapter,
+            f"{row.status} topic with {round(row.accuracy or 0)}% accuracy",
+            30 if row.status == "Weak" else 20,
+            learning_links_for(student, row.subject, row.chapter) or "/practice-progress",
+            "today",
+        ))
+
+    mistakes = StudentMistake.objects(student=student, resolved=False).order_by("-wrong_attempts", "-last_wrong_at")[:4]
+    for mistake in mistakes:
+        tasks.append(study_task(
+            f"mistake:{oid(mistake)}",
+            f"Retry mistake: {mistake.chapter}",
+            "My Mistakes",
+            mistake.subject,
+            mistake.chapter,
+            f"{mistake.wrong_attempts} wrong attempt(s) recorded",
+            20,
+            "/practice-progress",
+            "today",
+        ))
+
+    bookmarked_note_ids = {oid(bookmark.note) for bookmark in NoteBookmark.objects(student=student)}
+    notes = Note.objects(class_level=student.class_level).order_by("-created_at")[:8]
+    for note in notes:
+        if oid(note) in bookmarked_note_ids:
+            continue
+        tasks.append(study_task(
+            f"note:{oid(note)}",
+            f"Review notes: {note.title}",
+            "Learning",
+            note.subject,
+            note.chapter,
+            "Recent class note not bookmarked yet",
+            20,
+            "/learning",
+            "week",
+        ))
+        if len([task for task in tasks if task.category == "Learning"]) >= 2:
+            break
+
+    if not tasks:
+        tasks.append(study_task(
+            f"revision:{student.class_level}:{today_key()}",
+            "General class revision",
+            "Revision",
+            "",
+            "",
+            "No urgent weak topic, assignment, or exam found",
+            20,
+            "/learning",
+            "today",
+        ))
+    return tasks
+
+
+def merge_plan_tasks(plan, candidates):
+    existing_by_source = {task.source_key: task for task in plan.tasks if getattr(task, "source_key", "")}
+    existing_sources = set(existing_by_source)
+    merged = list(plan.tasks)
+    for candidate in candidates:
+        if candidate.source_key in existing_sources:
+            current = existing_by_source[candidate.source_key]
+            current.title = candidate.title
+            current.category = candidate.category
+            current.subject = candidate.subject
+            current.chapter = candidate.chapter
+            current.reason = candidate.reason
+            current.minutes = candidate.minutes
+            current.link = candidate.link
+            current.scope = candidate.scope
+            continue
+        merged.append(candidate)
+        existing_sources.add(candidate.source_key)
+    return merged[:10]
+
+
 def get_or_create_study_plan(student):
     key = today_key()
     plan = StudyPlan.objects(student=student, plan_date=key).first()
     if plan:
-        return plan
-    tasks = []
-    weak_rows = list(TopicPerformance.objects(student=student, status__in=["Weak", "Needs Practice"]).order_by("accuracy")[:3])
-    for row in weak_rows:
-        tasks.append(
-            StudyPlanTask(
-                task_id=uuid4().hex,
-                title=f"Revise {row.chapter}",
-                category="Weak Topic",
-                subject=row.subject,
-                chapter=row.chapter,
-                minutes=30 if row.status == "Weak" else 20,
-                link=learning_links_for(student, row.subject, row.chapter),
-            )
-        )
-    mistakes = list(StudentMistake.objects(student=student, resolved=False).order_by("-last_wrong_at")[:2])
-    for mistake in mistakes:
-        tasks.append(
-            StudyPlanTask(
-                task_id=uuid4().hex,
-                title=f"Practice mistakes in {mistake.chapter}",
-                category="My Mistakes",
-                subject=mistake.subject,
-                chapter=mistake.chapter,
-                minutes=20,
-                link="/practice-progress",
-            )
-        )
-    upcoming = list(Assignment.objects(class_level=student.class_level, deadline__gte=datetime.utcnow()).order_by("deadline")[:2])
-    for assignment in upcoming:
-        tasks.append(
-            StudyPlanTask(
-                task_id=uuid4().hex,
-                title=f"Complete {assignment.subject} assignment: {assignment.title}",
-                category="Assignment",
-                subject=assignment.subject,
-                minutes=25,
-                link="/operations",
-            )
-        )
-    exams = list(Exam.objects(class_level=student.class_level, is_published=True, start_time__gte=datetime.utcnow()).order_by("start_time")[:2])
-    for exam in exams:
-        tasks.append(
-            StudyPlanTask(
-                task_id=uuid4().hex,
-                title=f"Prepare for {exam.subject}: {exam.name}",
-                category="Exam",
-                subject=exam.subject,
-                minutes=30,
-                link="/operations",
-            )
-        )
-    return StudyPlan(student=student, plan_date=key, tasks=tasks[:6]).save()
+        tasks = merge_plan_tasks(plan, planner_candidates(student))
+        plan.update(tasks=tasks, updated_at=datetime.utcnow())
+        return StudyPlan.objects(id=plan.id).first()
+    tasks = planner_candidates(student)
+    return StudyPlan(student=student, plan_date=key, tasks=tasks[:10]).save()
 
 
 def study_plan_json(plan):
@@ -1331,12 +1703,24 @@ def study_plan_json(plan):
                 "category": task.category,
                 "subject": task.subject,
                 "chapter": task.chapter,
+                "reason": getattr(task, "reason", ""),
                 "minutes": task.minutes,
                 "link": task.link,
+                "source_key": getattr(task, "source_key", ""),
+                "scope": getattr(task, "scope", "today"),
+                "status": getattr(task, "status", "Completed" if task.completed else "Pending"),
                 "completed": task.completed,
                 "completed_at": dt(task.completed_at),
             }
             for task in plan.tasks
+        ],
+        "today": [
+            task.task_id for task in plan.tasks
+            if getattr(task, "scope", "today") == "today"
+        ],
+        "week": [
+            task.task_id for task in plan.tasks
+            if getattr(task, "scope", "today") == "week"
         ],
     }
 
@@ -1351,7 +1735,7 @@ def process_published_exam_attempts(exam):
                 continue
             answer = answers.get(question.question_id)
             correct = bool(answer and normalize_answer(answer.answer) == normalize_answer(objective_correct_answer(question)))
-            update_practice_tracking(attempt.student, bank_question, correct, "exam")
+            update_practice_tracking(attempt.student, bank_question, correct, "exam", answer.answer if answer else "")
 
 
 QUESTION_BULK_HEADERS = ["Class", "Subject", "Chapter", "Type", "Difficulty", "Marks", "Question", "Option A", "Option B", "Option C", "Option D", "Correct Answer", "Explanation"]
@@ -1487,7 +1871,7 @@ def practice_submit(request, session_id):
 def practice_mistakes(request):
     user = require_roles(request, [ROLE_STUDENT])
     student = get_student_for_user(user)
-    rows = StudentMistake.objects(student=student, resolved=False).order_by("-last_wrong_at")
+    rows = StudentMistake.objects(student=student).order_by("-last_wrong_at")
     return ok({"results": [mistake_json(row) for row in rows]})
 
 
@@ -1498,16 +1882,25 @@ def practice_again(request, mistake_id):
     mistake = StudentMistake.objects(id=mistake_id, student=student).first()
     if not mistake or not mistake.question:
         return bad("Unable to load this mistake.", status.HTTP_404_NOT_FOUND)
-    session = PracticeSession(
-        student=student,
-        session_type="mistakes",
-        session_date=today_key(),
-        class_level=student.class_level,
-        subject=mistake.subject,
-        questions=[mistake.question],
-        total_questions=1,
-    ).save()
-    return ok({"session": practice_session_json(session)}, status.HTTP_201_CREATED)
+    answer = str(request.data.get("answer", "")).strip()
+    if not answer:
+        return bad("Enter an answer to retry this question.")
+    now = datetime.utcnow()
+    correct = evaluate_practice_answer(mistake.question, answer)
+    update_practice_tracking(student, mistake.question, correct, "practice", answer)
+    refreshed = StudentMistake.objects(id=mistake.id, student=student).first()
+    retry_attempts = getattr(refreshed, "retry_attempts", 0) + 1
+    refreshed.update(
+        retry_attempts=retry_attempts,
+        last_retry_at=now,
+        last_retry_answer=answer,
+        last_retry_correct=correct,
+        resolved=correct or refreshed.resolved,
+        correct_streak=refreshed.correct_streak if correct else 0,
+        corrected_at=now if correct else refreshed.corrected_at,
+        updated_at=now,
+    )
+    return ok({"mistake": mistake_json(StudentMistake.objects(id=mistake.id, student=student).first()), "correct": correct})
 
 
 @api_view(["GET"])
@@ -1542,14 +1935,22 @@ def study_plan_task_complete(request, task_id):
     plan = StudyPlan.objects(student=student, plan_date=today_key()).first()
     if not plan:
         return bad("Study plan not found", status.HTTP_404_NOT_FOUND)
-    completed = bool_value(request.data.get("completed", True))
+    requested_status = request.data.get("status")
+    if requested_status not in ["Pending", "Completed", "Skipped", None]:
+        return bad("Invalid task status.")
+    completed = bool_value(request.data.get("completed", requested_status == "Completed"))
     tasks = []
     now = datetime.utcnow()
+    found = False
     for task in plan.tasks:
         if task.task_id == task_id:
+            found = True
+            task.status = requested_status or ("Completed" if completed else "Pending")
             task.completed = completed
             task.completed_at = now if completed else None
         tasks.append(task)
+    if not found:
+        return bad("Study task not found", status.HTTP_404_NOT_FOUND)
     plan.update(tasks=tasks, updated_at=now)
     return ok({"plan": study_plan_json(StudyPlan.objects(id=plan.id).first())})
 
@@ -1680,15 +2081,30 @@ def question_from_data(data, existing=None, order=0):
         options = ["True", "False"]
     else:
         options = []
+    text = data.get("text", existing.text if existing else "").strip()
+    if not text:
+        raise ValueError("Question text is required")
+    try:
+        marks = float(data.get("marks", existing.marks if existing else 1))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Marks must be greater than 0") from exc
+    if marks <= 0:
+        raise ValueError("Marks must be greater than 0")
+    correct_answer = data.get("correct_answer", existing.correct_answer if existing else "").strip()
+    expected_answer = data.get("expected_answer", existing.expected_answer if existing else "").strip()
+    if qtype in ["mcq", "true_false"] and not correct_answer:
+        raise ValueError("Correct answer missing")
+    if qtype in ["short", "long"] and not expected_answer:
+        raise ValueError("Expected answer missing")
     return ExamQuestion(
         question_id=existing.question_id if existing else uuid4().hex,
         question_bank_id=data.get("question_bank_id", existing.question_bank_id if existing else "").strip(),
-        text=data.get("text", existing.text if existing else "").strip(),
+        text=text,
         question_type=qtype,
-        marks=float(data.get("marks", existing.marks if existing else 1)),
+        marks=marks,
         options=options,
-        correct_answer=data.get("correct_answer", existing.correct_answer if existing else "").strip(),
-        expected_answer=data.get("expected_answer", existing.expected_answer if existing else "").strip(),
+        correct_answer=correct_answer,
+        expected_answer=expected_answer,
         explanation=data.get("explanation", existing.explanation if existing else "").strip(),
         chapter=data.get("chapter", existing.chapter if existing else "").strip(),
         difficulty=data.get("difficulty", existing.difficulty if existing else "Medium"),
@@ -1837,6 +2253,12 @@ def anti_cheat_message(count):
     return "Your exam was automatically submitted because you left the exam screen."
 
 
+def auto_submit_reason_from_request(reason):
+    if reason == "fullscreen_exit":
+        return "fullscreen_exit"
+    return "tab_window_exit"
+
+
 @api_view(["GET", "POST", "PUT", "DELETE"])
 def exams(request):
     user = require_roles(request, [ROLE_ADMIN, ROLE_TEACHER, ROLE_STUDENT])
@@ -1922,6 +2344,172 @@ def exam_questions(request, exam_id):
     return ok({"exam": exam_json(Exam.objects(id=exam.id).first(), user, include_questions=True, include_attempts=True)})
 
 
+EXAM_QUESTION_BULK_HEADERS = [
+    "Question",
+    "Type",
+    "Option A",
+    "Option B",
+    "Option C",
+    "Option D",
+    "Correct Answer",
+    "Expected Answer",
+    "Marks",
+    "Chapter",
+    "Difficulty",
+    "Explanation",
+]
+
+
+def exam_question_template(request):
+    require_roles(request, [ROLE_ADMIN, ROLE_TEACHER])
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(EXAM_QUESTION_BULK_HEADERS)
+    writer.writerow(["What is 2 + 2?", "mcq", "2", "3", "4", "5", "4", "", "1", "Numbers", "Easy", "Basic addition"])
+    writer.writerow(["The Sun rises in the east.", "true_false", "", "", "", "", "True", "", "1", "General", "Easy", ""])
+    writer.writerow(["Explain photosynthesis.", "short", "", "", "", "", "", "Plants make food using sunlight.", "3", "Biology", "Medium", ""])
+    response = HttpResponse(output.getvalue(), content_type="text/csv")
+    response["Content-Disposition"] = 'attachment; filename="exam-question-template.csv"'
+    return response
+
+
+def uploaded_question_rows(upload):
+    name = (upload.name or "").lower()
+    if name.endswith(".xlsx"):
+        workbook = load_workbook(upload, read_only=True, data_only=True)
+        sheet = workbook.active
+        rows = list(sheet.iter_rows(values_only=True))
+        if not rows:
+            return []
+        headers = [str(value or "").strip() for value in rows[0]]
+        return [
+            {headers[index]: value for index, value in enumerate(row) if index < len(headers)}
+            for row in rows[1:]
+            if any(value not in [None, ""] for value in row)
+        ]
+    text = upload.read().decode("utf-8-sig")
+    return list(csv.DictReader(io.StringIO(text)))
+
+
+def row_value(row, *keys):
+    lowered = {str(key).strip().lower(): value for key, value in row.items()}
+    for key in keys:
+        value = lowered.get(key.lower())
+        if value not in [None, ""]:
+            return str(value).strip()
+    return ""
+
+
+def exam_question_data_from_row(row):
+    qtype_raw = row_value(row, "Type", "question_type").lower() or "mcq"
+    qtype = {"true/false": "true_false", "true false": "true_false", "tf": "true_false"}.get(qtype_raw, qtype_raw)
+    expected = row_value(row, "Expected Answer", "expected_answer")
+    correct = row_value(row, "Correct Answer", "correct_answer")
+    return {
+        "text": row_value(row, "Question", "question", "text"),
+        "question_type": qtype,
+        "options": [row_value(row, "Option A", "option_a"), row_value(row, "Option B", "option_b"), row_value(row, "Option C", "option_c"), row_value(row, "Option D", "option_d")],
+        "correct_answer": correct,
+        "expected_answer": expected or (correct if qtype in ["short", "long"] else ""),
+        "marks": row_value(row, "Marks", "marks") or 1,
+        "chapter": row_value(row, "Chapter", "chapter", "topic"),
+        "difficulty": row_value(row, "Difficulty", "difficulty") or "Medium",
+        "explanation": row_value(row, "Explanation", "explanation"),
+    }
+
+
+@api_view(["POST"])
+def exam_questions_bulk_import(request, exam_id):
+    user = require_roles(request, [ROLE_ADMIN, ROLE_TEACHER])
+    exam = Exam.objects(id=exam_id).first()
+    if not exam:
+        return bad("Exam not found", status.HTTP_404_NOT_FOUND)
+    enforce_exam_manager(user, exam)
+    upload = request.FILES.get("file")
+    if not upload:
+        return bad("Upload a CSV or XLSX file with exam questions.")
+    try:
+        rows = uploaded_question_rows(upload)
+    except UnicodeDecodeError:
+        return bad("Unable to read this file. Please upload a CSV or XLSX file.")
+    except Exception:
+        return bad("Unable to read this file. Please upload a CSV or XLSX file.")
+    existing_texts = {question.text.strip().lower() for question in exam.questions}
+    seen_texts = set()
+    parsed_questions = []
+    errors = []
+    for index, row in enumerate(rows, start=2):
+        try:
+            body = exam_question_data_from_row(row)
+            text_key = body["text"].strip().lower()
+            if not text_key:
+                raise ValueError("Question text is required")
+            if text_key in existing_texts or text_key in seen_texts:
+                raise ValueError("Duplicate question")
+            parsed_questions.append(question_from_data(body, order=len(exam.questions) + len(parsed_questions) + 1))
+            seen_texts.add(text_key)
+        except (TypeError, ValueError, ValidationError) as exc:
+            errors.append({"row": index, "error": str(exc) or "Invalid data in this row"})
+    if errors:
+        return ok({"total_rows": len(rows), "valid_count": len(parsed_questions), "invalid_count": len(errors), "errors": errors}, status.HTTP_400_BAD_REQUEST)
+    questions = sorted(list(exam.questions) + parsed_questions, key=lambda question: question.order)
+    exam.update(questions=questions, total_marks=sum(question.marks for question in questions), updated_at=datetime.utcnow())
+    return ok(
+        {
+            "total_rows": len(rows),
+            "valid_count": len(parsed_questions),
+            "invalid_count": 0,
+            "errors": [],
+            "exam": exam_json(Exam.objects(id=exam.id).first(), user, include_questions=True, include_attempts=True),
+        },
+        status.HTTP_201_CREATED,
+    )
+
+
+@api_view(["POST"])
+def exam_duplicate(request, exam_id):
+    user = require_roles(request, [ROLE_ADMIN, ROLE_TEACHER])
+    exam = Exam.objects(id=exam_id).first()
+    if not exam:
+        return bad("Exam not found", status.HTTP_404_NOT_FOUND)
+    enforce_exam_manager(user, exam)
+    questions = []
+    for index, question in enumerate(sorted(exam.questions, key=lambda item: item.order), start=1):
+        questions.append(
+            ExamQuestion(
+                question_id=uuid4().hex,
+                question_bank_id=question.question_bank_id,
+                text=question.text,
+                question_type=question.question_type,
+                marks=question.marks,
+                options=list(question.options),
+                correct_answer=question.correct_answer,
+                expected_answer=question.expected_answer,
+                explanation=question.explanation,
+                chapter=question.chapter,
+                difficulty=question.difficulty,
+                order=index,
+            )
+        )
+    row = Exam(
+        name=f"{exam.name} Copy",
+        class_level=exam.class_level,
+        subject=exam.subject,
+        instructions=exam.instructions,
+        exam_date=exam.exam_date,
+        start_time=exam.start_time,
+        end_time=exam.end_time,
+        duration_minutes=exam.duration_minutes,
+        total_marks=exam.total_marks,
+        passing_marks=exam.passing_marks,
+        is_published=False,
+        result_published=False,
+        questions=questions,
+        created_by=user,
+    ).save()
+    return ok({"exam": exam_json(row, user, include_questions=True, include_attempts=True)}, status.HTTP_201_CREATED)
+
+
 @api_view(["POST"])
 def exam_start(request, exam_id):
     user = require_roles(request, [ROLE_STUDENT])
@@ -2003,7 +2591,7 @@ def exam_attempt_violation(request, attempt_id):
     if not updated:
         current = ExamAttempt.objects(id=attempt.id, student=student).first()
         return ok({"message": "This exam has already been submitted.", "attempt": attempt_json(current, include_answers=True, include_scores=current.exam.result_published), "auto_submitted": current.auto_submitted})
-    updated = finalize_attempt(updated, "submitted", auto_submitted=True, auto_submit_reason="exam_screen_exit")
+    updated = finalize_attempt(updated, "submitted", auto_submitted=True, auto_submit_reason=auto_submit_reason_from_request(request.data.get("reason", "")))
     return ok({"message": anti_cheat_message(updated.violation_count), "attempt": attempt_json(updated, include_answers=True, include_scores=updated.exam.result_published), "auto_submitted": True})
 
 

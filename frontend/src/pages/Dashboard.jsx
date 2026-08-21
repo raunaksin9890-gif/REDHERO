@@ -4,7 +4,7 @@ import { Link } from "react-router-dom";
 import { API_URL, api } from "../api/client.js";
 import dashboardHero from "../assets/dashboard-hero.png";
 import { useAuth } from "../components/AuthProvider.jsx";
-import { LoadingOverlay, SkeletonGrid, useToast } from "../components/UX.jsx";
+import { AnimatedValue, LoadingOverlay, SkeletonGrid, useToast } from "../components/UX.jsx";
 
 export function Dashboard() {
   const { user } = useAuth();
@@ -203,29 +203,7 @@ function StudentAnalytics({ data, extras }) {
 }
 
 function CountValue({ value }) {
-  const numeric = typeof value === "number" ? value : Number(String(value).replace("%", ""));
-  const suffix = String(value).endsWith("%") ? "%" : "";
-  const [display, setDisplay] = useState(Number.isFinite(numeric) ? 0 : value);
-
-  useEffect(() => {
-    if (!Number.isFinite(numeric)) {
-      setDisplay(value);
-      return;
-    }
-    const duration = 850;
-    const start = performance.now();
-    let frame;
-    function tick(now) {
-      const progress = Math.min((now - start) / duration, 1);
-      const eased = 1 - Math.pow(1 - progress, 3);
-      setDisplay(Math.round(numeric * eased));
-      if (progress < 1) frame = requestAnimationFrame(tick);
-    }
-    frame = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(frame);
-  }, [numeric, value]);
-
-  return <>{display}{suffix}</>;
+  return <AnimatedValue value={value} />;
 }
 
 function Stat({ icon: Icon, label, value, trend, progress, index = 0 }) {
@@ -699,7 +677,7 @@ const dashboardPremiumStyles = `
 .premium-dashboard .student-feature-card:hover,
 .premium-dashboard .premium-stat-card:hover,
 .premium-dashboard .analytics-card:hover {
-  transform: translateY(-6px) scale(1.01);
+  transform: translateY(-4px) scale(1.005);
   border-color: rgba(214,31,58,.26);
   box-shadow: 0 34px 90px rgba(0,0,0,.32), 0 0 54px rgba(214,31,58,.16);
 }
@@ -844,6 +822,7 @@ const dashboardPremiumStyles = `
   place-items: center;
   background: conic-gradient(#d61f3a calc(var(--value) * 1%), rgba(255,255,255,.12) 0);
   box-shadow: inset 0 0 0 15px #12141a, 0 0 42px rgba(214,31,58,.16);
+  animation: dashRingFill 420ms ease both;
 }
 .dashboard-ring strong {
   font-size: 34px;
@@ -946,6 +925,7 @@ const dashboardPremiumStyles = `
 @keyframes dashCardIn { from { opacity: 0; transform: translateY(18px) scale(.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
 @keyframes dashBars { from { transform: scaleY(.25); opacity: .4; } to { transform: scaleY(1); opacity: 1; } }
 @keyframes dashProgress { from { transform: scaleX(0); transform-origin: left; } to { transform: scaleX(1); transform-origin: left; } }
+@keyframes dashRingFill { from { --value: 0; } }
 @media (max-width: 1240px) {
   .premium-stat-grid,
   .premium-dashboard .student-card-grid {
@@ -1629,7 +1609,6 @@ const dashboardPremiumStyles = `
     display: grid;
   }
 }
-
 html[data-theme="light"] .premium-dashboard {
   color: #172033;
   background:
@@ -1776,4 +1755,18 @@ html[data-theme="light"] .student-premium .video-resource:hover,
 html[data-theme="light"] .student-premium .accordion-item:hover { background: #fff7f8; border-color: rgba(214,31,58,.24); }
 html[data-theme="light"] .student-premium .mini-button { color: #334155; background: #f8fafc; border-color: rgba(203,213,225,.86); }
 html[data-theme="light"] .student-premium .premium-empty { color: #64748b; }
+
+@media (prefers-reduced-motion: reduce) {
+  .premium-dashboard *,
+  .premium-dashboard *::before,
+  .premium-dashboard *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+  }
+  .premium-dashboard .floating-action,
+  .premium-dashboard .welcome-glow {
+    animation: none !important;
+  }
+}
 `;

@@ -1019,7 +1019,6 @@ const learningHubStyles = `
   .mini-thumb { height: 58px; }
   .editing-item { grid-template-columns: 1fr; }
 }
-
 html[data-theme="light"] .learning-hub {
   color: #172033;
   background:
@@ -1109,4 +1108,14 @@ html[data-theme="light"] .learning-hub textarea::placeholder { color: #94a3b8; }
 html[data-theme="light"] .learning-hub .selected-resource header { border-bottom-color: rgba(203,213,225,.76); }
 html[data-theme="light"] .learning-hub .selected-resource header span { color: #9d1430; background: #fff1f2; }
 html[data-theme="light"] .learning-hub .manage-card > span { color: #475569; }
+
+@media (prefers-reduced-motion: reduce) {
+  .learning-hub *,
+  .learning-hub *::before,
+  .learning-hub *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 1ms !important;
+  }
+}
 `;
