@@ -4,7 +4,7 @@ import { Link } from "react-router-dom";
 import { api } from "../api/client.js";
 import dashboardHero from "../assets/dashboard-hero.png";
 import { useAuth } from "../components/AuthProvider.jsx";
-import { EmptyState, SkeletonGrid } from "../components/UX.jsx";
+import { EmptyState, LoadingOverlay, SkeletonGrid } from "../components/UX.jsx";
 
 export function Dashboard() {
   const { user } = useAuth();
@@ -33,11 +33,19 @@ export function Dashboard() {
     });
   }, [user.role]);
 
-  if (error) return <div className="panel error-state">{error}</div>;
-  if (!data) return <SkeletonGrid count={6} />;
+  const loading = !data && !error;
+  const withLoader = (content) => (
+    <>
+      <LoadingOverlay show={loading} label="Loading dashboard" />
+      {content}
+    </>
+  );
+
+  if (error) return withLoader(<div className="panel error-state">{error}</div>);
+  if (!data) return withLoader(<SkeletonGrid count={6} />);
 
   if (user.role === "super_admin") {
-    return (
+    return withLoader(
       <div className="premium-dashboard admin-dashboard page-grid">
         <style>{dashboardPremiumStyles}</style>
         <NoticeList notices={data.recent_notices} />
@@ -54,7 +62,7 @@ export function Dashboard() {
   }
 
   if (user.role === "teacher") {
-    return (
+    return withLoader(
       <div className="premium-dashboard teacher-dashboard page-grid">
         <style>{dashboardPremiumStyles}</style>
         <NoticeList notices={data.recent_notices} />
@@ -64,7 +72,7 @@ export function Dashboard() {
     );
   }
 
-  return (
+  return withLoader(
     <div className="student-dashboard premium-dashboard student-premium">
       <style>{dashboardPremiumStyles}</style>
       <section className="student-top-row">

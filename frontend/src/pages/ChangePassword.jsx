@@ -86,7 +86,9 @@ export function ChangePassword() {
     <div className="auth-page compact">
       <section className="auth-panel">
         <div className="brand large">
-          <div className="brand-mark">R</div>
+          <div className="brand-mark">
+            <span className="redhero-logo" aria-hidden="true" />
+          </div>
           <div>
             <strong>RedHero</strong>
             <span>First login password change</span>

@@ -49,7 +49,9 @@ export function AppShell() {
       <aside className="sidebar" aria-label="Primary navigation">
         <div className="sidebar-head">
           <div className="brand">
-            <div className="brand-mark">R</div>
+            <div className="brand-mark">
+              <span className="redhero-logo" aria-hidden="true" />
+            </div>
             <div className="brand-copy">
               <strong>RedHero</strong>
               <span>Learning Portal</span>

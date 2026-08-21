@@ -1,7 +1,8 @@
-import { AlertTriangle, CheckCircle2, Info, Loader2, Search, X } from "lucide-react";
-import { createContext, useContext, useMemo, useState } from "react";
+import { AlertTriangle, CheckCircle2, Info, Search, X } from "lucide-react";
+import { createContext, useContext, useEffect, useMemo, useState } from "react";
 
 const ToastContext = createContext(null);
+const LoadingOverlaySuppressedContext = createContext(false);
 
 export function ToastProvider({ children }) {
   const [toasts, setToasts] = useState([]);
@@ -36,21 +37,45 @@ export function useToast() {
   return useContext(ToastContext);
 }
 
+export function LoadingOverlaySuppressor({ active, children }) {
+  return <LoadingOverlaySuppressedContext.Provider value={active}>{children}</LoadingOverlaySuppressedContext.Provider>;
+}
+
 export function PageLoader({ label = "Loading RedHero" }) {
-  return (
-    <div className="center">
-      <Loader2 className="spin" size={22} />
-      <span>{label}</span>
-    </div>
-  );
+  const suppressed = useContext(LoadingOverlaySuppressedContext);
+  if (suppressed) return null;
+  return <LogoLoadingOverlay label={label} />;
 }
 
 export function LoadingOverlay({ show, label = "Working" }) {
-  if (!show) return null;
+  const suppressed = useContext(LoadingOverlaySuppressedContext);
+  const [visible, setVisible] = useState(show);
+  const [leaving, setLeaving] = useState(false);
+
+  useEffect(() => {
+    if (show) {
+      setVisible(true);
+      setLeaving(false);
+      return undefined;
+    }
+    if (!visible) return undefined;
+    setLeaving(true);
+    const removeTimer = window.setTimeout(() => setVisible(false), 360);
+    return () => window.clearTimeout(removeTimer);
+  }, [show, visible]);
+
+  if (!visible || suppressed) return null;
+  return <LogoLoadingOverlay label={label} leaving={leaving} />;
+}
+
+export function LogoLoadingOverlay({ label = "Loading...", leaving = false }) {
   return (
-    <div className="loading-overlay" role="status" aria-live="polite">
-      <Loader2 className="spin" size={24} />
-      <span>{label}</span>
+    <div className={`loading-overlay logo-loading-overlay ${leaving ? "is-leaving" : ""}`} role="status" aria-live="polite" aria-label={label}>
+      <div className="logo-loader-mark">
+        <span aria-hidden="true" />
+        <i className="redhero-logo" aria-hidden="true" />
+      </div>
+      {label && <strong>{label}</strong>}
     </div>
   );
 }
@@ -93,7 +118,9 @@ export function RouteMessage({ code, title, message }) {
   return (
     <div className="route-message">
       <div className="brand large">
-        <div className="brand-mark">R</div>
+        <div className="brand-mark">
+          <span className="redhero-logo" aria-hidden="true" />
+        </div>
         <div>
           <strong>RedHero</strong>
           <span>Learning Portal</span>

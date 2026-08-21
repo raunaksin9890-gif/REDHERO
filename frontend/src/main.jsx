@@ -1,9 +1,9 @@
-import React, { Suspense, lazy } from "react";
+import React, { Suspense, lazy, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { Navigate, Route, BrowserRouter as Router, Routes } from "react-router-dom";
 import { AppShell } from "./components/AppShell.jsx";
 import { AuthProvider, useAuth } from "./components/AuthProvider.jsx";
-import { PageLoader, RouteMessage, ToastProvider } from "./components/UX.jsx";
+import { LoadingOverlaySuppressor, LogoLoadingOverlay, PageLoader, RouteMessage, ToastProvider } from "./components/UX.jsx";
 import { Login } from "./pages/Login.jsx";
 import { ChangePassword } from "./pages/ChangePassword.jsx";
 import "./styles/app.css";
@@ -18,7 +18,7 @@ const PracticeProgress = lazy(() => import("./pages/PracticeProgress.jsx").then(
 
 function Protected({ children }) {
   const { user, loading } = useAuth();
-  if (loading) return <PageLoader />;
+  if (loading) return null;
   if (!user) return <Navigate to="/login" replace />;
   if (user.first_login || user.force_password_change) return <Navigate to="/change-password" replace />;
   return children;
@@ -27,6 +27,18 @@ function Protected({ children }) {
 function App() {
   return (
     <AuthProvider>
+      <AppContent />
+    </AuthProvider>
+  );
+}
+
+function AppContent() {
+  const [initialLoadingActive, setInitialLoadingActive] = useState(true);
+
+  return (
+    <>
+      <InitialLogoSplash onActiveChange={setInitialLoadingActive} />
+      <LoadingOverlaySuppressor active={initialLoadingActive}>
       <ToastProvider>
         <Router>
           <Suspense fallback={<PageLoader />}>
@@ -57,8 +69,38 @@ function App() {
           </Suspense>
         </Router>
       </ToastProvider>
-    </AuthProvider>
+      </LoadingOverlaySuppressor>
+    </>
   );
+}
+
+function InitialLogoSplash({ onActiveChange }) {
+  const { loading } = useAuth();
+  const [visible, setVisible] = useState(true);
+  const [leaving, setLeaving] = useState(false);
+  const [startedAt] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (loading) return undefined;
+    const elapsed = Date.now() - startedAt;
+    const remaining = Math.max(0, 500 - elapsed);
+    const fadeTimer = window.setTimeout(() => setLeaving(true), remaining);
+    return () => window.clearTimeout(fadeTimer);
+  }, [loading, startedAt]);
+
+  useEffect(() => {
+    if (!leaving) return undefined;
+    const removeTimer = window.setTimeout(() => setVisible(false), 360);
+    return () => window.clearTimeout(removeTimer);
+  }, [leaving]);
+
+  useEffect(() => {
+    onActiveChange(visible);
+  }, [onActiveChange, visible]);
+
+  if (!visible) return null;
+
+  return <LogoLoadingOverlay label="Loading RedHero" leaving={leaving} />;
 }
 
 createRoot(document.getElementById("root")).render(<App />);
