@@ -71,15 +71,29 @@ export function Directory() {
 
 function StudentForm({ onSaved, setMessage }) {
   const [form, setForm] = useState({ name: "", email: "", class_level: "10", division: "A", roll_number: "" });
+  const [busy, setBusy] = useState(false);
+  const toast = useToast();
   async function submit(event) {
     event.preventDefault();
     try {
-      const result = await api("/students/", { method: "POST", body: JSON.stringify(form) });
+      setBusy(true);
+      const payload = {
+        ...form,
+        name: form.name.trim(),
+        email: form.email.trim().toLowerCase(),
+        division: form.division.trim(),
+        roll_number: form.roll_number.trim(),
+      };
+      const result = await api("/students/", { method: "POST", body: JSON.stringify(payload) });
       setMessage(`Created ${result.student.student_id} with default password ${result.default_password}`);
+      toast?.show(`Student ${result.student.student_id} created successfully`);
       setForm({ name: "", email: "", class_level: "10", division: "A", roll_number: "" });
-      onSaved();
+      await onSaved();
     } catch (err) {
       setMessage(err.message);
+      toast?.show(err.message, "error");
+    } finally {
+      setBusy(false);
     }
   }
   return (
@@ -87,15 +101,17 @@ function StudentForm({ onSaved, setMessage }) {
       <input placeholder="Name" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} required />
       <input placeholder="Email" type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} required />
       <select value={form.class_level} onChange={(event) => setForm({ ...form, class_level: event.target.value })}>{classes.map((item) => <option key={item}>{item}</option>)}</select>
-      <input placeholder="Division" value={form.division} onChange={(event) => setForm({ ...form, division: event.target.value })} />
-      <input placeholder="Roll" value={form.roll_number} onChange={(event) => setForm({ ...form, roll_number: event.target.value })} />
-      <button className="icon-button" title="Add student"><Plus size={18} /></button>
+      <input placeholder="Division" value={form.division} onChange={(event) => setForm({ ...form, division: event.target.value })} required />
+      <input placeholder="Roll" value={form.roll_number} onChange={(event) => setForm({ ...form, roll_number: event.target.value })} required />
+      <button className="icon-button" type="submit" title="Add student" disabled={busy}>{busy ? "..." : <Plus size={18} />}</button>
     </form>
   );
 }
 
 function TeacherForm({ onSaved, setMessage }) {
   const [form, setForm] = useState({ name: "", email: "", subjects: "Mathematics", assigned_classes: "10" });
+  const [busy, setBusy] = useState(false);
+  const toast = useToast();
   async function submit(event) {
     event.preventDefault();
     const payload = {
@@ -105,21 +121,30 @@ function TeacherForm({ onSaved, setMessage }) {
       assigned_classes: form.assigned_classes.split(",").map((item) => item.trim()).filter(Boolean),
     };
     try {
+      const invalidClasses = payload.assigned_classes.filter((item) => !classes.includes(item));
+      if (!payload.subjects.length) throw new Error("Add at least one subject");
+      if (!payload.assigned_classes.length) throw new Error("Assign at least one class");
+      if (invalidClasses.length) throw new Error(`Invalid classes: ${invalidClasses.join(", ")}`);
+      setBusy(true);
       const result = await api("/teachers/", { method: "POST", body: JSON.stringify(payload) });
       setMessage(`Created ${result.teacher.teacher_id} with default password ${result.default_password}`);
+      toast?.show(`Teacher ${result.teacher.teacher_id} created successfully`);
       setForm({ name: "", email: "", subjects: "Mathematics", assigned_classes: "10" });
-      onSaved();
+      await onSaved();
     } catch (err) {
       setMessage(err.message);
+      toast?.show(err.message, "error");
+    } finally {
+      setBusy(false);
     }
   }
   return (
     <form className="inline-form" onSubmit={submit}>
       <input placeholder="Name" value={form.name} onChange={(event) => setForm({ ...form, name: event.target.value })} required />
       <input placeholder="Email" type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} required />
-      <input placeholder="Subjects" value={form.subjects} onChange={(event) => setForm({ ...form, subjects: event.target.value })} />
-      <input placeholder="Classes" value={form.assigned_classes} onChange={(event) => setForm({ ...form, assigned_classes: event.target.value })} />
-      <button className="icon-button" title="Add teacher"><Plus size={18} /></button>
+      <input placeholder="Subjects" value={form.subjects} onChange={(event) => setForm({ ...form, subjects: event.target.value })} required />
+      <input placeholder="Classes" value={form.assigned_classes} onChange={(event) => setForm({ ...form, assigned_classes: event.target.value })} required />
+      <button className="icon-button" type="submit" title="Add teacher" disabled={busy}>{busy ? "..." : <Plus size={18} />}</button>
     </form>
   );
 }

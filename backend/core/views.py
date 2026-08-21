@@ -533,19 +533,57 @@ def students(request):
         return ok({"results": [student_json(row) for row in query.order_by("student_id")]})
     require_roles(request, [ROLE_ADMIN])
     data = request.data
+    created_user = None
+    created_fresh_user = False
     try:
-        created_user = create_user(data["email"], data["name"], ROLE_STUDENT)
+        name = str(data.get("name", "")).strip()
+        email = str(data.get("email", "")).lower().strip()
+        class_level = str(data.get("class_level", "")).strip()
+        division = str(data.get("division", "")).strip()
+        roll_number = str(data.get("roll_number", "")).strip()
+        if not name:
+            raise ValueError("Student name is required")
+        if not email:
+            raise ValueError("Student email is required")
+        if class_level not in CLASSES:
+            raise ValueError("Select a valid class")
+        if not division:
+            raise ValueError("Division is required")
+        if not roll_number:
+            raise ValueError("Roll number is required")
+        if Student.objects(email=email).first():
+            raise ValueError("A student with this email already exists")
+
+        existing_user = User.objects(email=email).first()
+        if existing_user:
+            if existing_user.role != ROLE_STUDENT or Student.objects(user=existing_user).first():
+                raise ValueError("This email is already used by another account")
+            created_user = existing_user
+            created_user.update(
+                name=name,
+                approved=True,
+                is_active=True,
+                first_login=True,
+                force_password_change=True,
+                password_hash=hash_password(DEFAULT_PASSWORD),
+                updated_at=datetime.utcnow(),
+            )
+        else:
+            created_user = create_user(email, name, ROLE_STUDENT)
+            created_fresh_user = True
         student = Student(
             user=created_user,
             student_id=next_code("student", "R"),
-            name=data["name"],
-            email=data["email"].lower().strip(),
-            class_level=str(data["class_level"]),
-            division=data.get("division", ""),
-            roll_number=str(data.get("roll_number", "")),
+            name=name,
+            email=email,
+            class_level=class_level,
+            division=division,
+            roll_number=roll_number,
             profile_photo=data.get("profile_photo", ""),
         ).save()
-    except (KeyError, NotUniqueError, ValidationError) as exc:
+    except (KeyError, NotUniqueError, ValidationError, ValueError) as exc:
+        if created_fresh_user and created_user:
+            created_user.delete()
         return bad(str(exc))
     return ok({"student": student_json(student), "default_password": DEFAULT_PASSWORD}, status.HTTP_201_CREATED)
 
@@ -611,17 +649,55 @@ def teachers(request):
     if request.method == "GET":
         return ok({"results": [teacher_json(row) for row in Teacher.objects.order_by("teacher_id")]})
     data = request.data
+    created_user = None
+    created_fresh_user = False
     try:
-        created_user = create_user(data["email"], data["name"], ROLE_TEACHER)
+        name = str(data.get("name", "")).strip()
+        email = str(data.get("email", "")).lower().strip()
+        subjects = [str(item).strip() for item in data.get("subjects", []) if str(item).strip()]
+        assigned_classes = [str(item).strip() for item in data.get("assigned_classes", []) if str(item).strip()]
+        invalid_classes = [item for item in assigned_classes if item not in CLASSES]
+        if not name:
+            raise ValueError("Teacher name is required")
+        if not email:
+            raise ValueError("Teacher email is required")
+        if not subjects:
+            raise ValueError("Add at least one subject")
+        if not assigned_classes:
+            raise ValueError("Assign at least one class")
+        if invalid_classes:
+            raise ValueError(f"Invalid classes: {', '.join(invalid_classes)}")
+        if Teacher.objects(email=email).first():
+            raise ValueError("A teacher with this email already exists")
+
+        existing_user = User.objects(email=email).first()
+        if existing_user:
+            if existing_user.role != ROLE_TEACHER or Teacher.objects(user=existing_user).first():
+                raise ValueError("This email is already used by another account")
+            created_user = existing_user
+            created_user.update(
+                name=name,
+                approved=True,
+                is_active=True,
+                first_login=True,
+                force_password_change=True,
+                password_hash=hash_password(DEFAULT_PASSWORD),
+                updated_at=datetime.utcnow(),
+            )
+        else:
+            created_user = create_user(email, name, ROLE_TEACHER)
+            created_fresh_user = True
         teacher = Teacher(
             user=created_user,
             teacher_id=next_code("teacher", "T"),
-            name=data["name"],
-            email=data["email"].lower().strip(),
-            subjects=data.get("subjects", []),
-            assigned_classes=[str(item) for item in data.get("assigned_classes", [])],
+            name=name,
+            email=email,
+            subjects=subjects,
+            assigned_classes=assigned_classes,
         ).save()
-    except (KeyError, NotUniqueError, ValidationError) as exc:
+    except (KeyError, NotUniqueError, ValidationError, ValueError) as exc:
+        if created_fresh_user and created_user:
+            created_user.delete()
         return bad(str(exc))
     return ok({"teacher": teacher_json(teacher), "default_password": DEFAULT_PASSWORD}, status.HTTP_201_CREATED)
 

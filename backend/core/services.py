@@ -6,8 +6,22 @@ from .models import Counter
 
 
 def next_code(name, prefix):
-    counter = Counter.objects(name=name).modify(upsert=True, new=True, inc__value=1)
-    return f"{prefix}{counter.value:05d}"
+    # Seed/import commands may create profile IDs before the counter exists.
+    # Keep advancing atomically until an actually unused ID is found.
+    model_field = None
+    if name in ["student", "teacher"]:
+        from .models import Student, Teacher
+
+        model_field = (Student, "student_id") if name == "student" else (Teacher, "teacher_id")
+
+    while True:
+        counter = Counter.objects(name=name).modify(upsert=True, new=True, inc__value=1)
+        code = f"{prefix}{counter.value:05d}"
+        if not model_field:
+            return code
+        model, field = model_field
+        if not model.objects(**{field: code}).only("id").first():
+            return code
 
 
 def parse_date(value):
