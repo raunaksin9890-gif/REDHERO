@@ -1442,7 +1442,6 @@ def select_daily_questions(student, limit):
             break
     return selected
 
-
 def get_or_create_daily_session(student):
     key = today_key()
 
@@ -1465,24 +1464,36 @@ def get_or_create_daily_session(student):
             total_questions=len(questions),
         ).save()
 
-    # Never modify a completed/submitted practice attempt
+    # Never modify completed/submitted attempts
     if existing.status != "in_progress":
         return existing
 
-    # Re-fetch the latest questions currently eligible for this student
-    latest_questions = select_daily_questions(student, practice_count())
+    # Get latest valid questions for student's class
+    latest_questions = select_daily_questions(
+        student,
+        practice_count()
+    )
 
-    if not latest_questions:
-        return existing
+    # If old session contains a deleted/broken question reference,
+    # rebuild today's in-progress session using valid questions.
+    try:
+        current_questions = list(existing.questions or [])
+    except Exception:
+        existing.update(
+            questions=latest_questions,
+            total_questions=len(latest_questions),
+            updated_at=datetime.utcnow()
+        )
 
-    current_questions = list(existing.questions or [])
+        return PracticeSession.objects(
+            id=existing.id
+        ).first()
 
     current_ids = {
         oid(question)
         for question in current_questions
     }
 
-    # Keep the student's existing questions and add newly eligible ones.
     merged_questions = list(current_questions)
 
     for question in latest_questions:
@@ -1492,8 +1503,6 @@ def get_or_create_daily_session(student):
             merged_questions.append(question)
             current_ids.add(question_id)
 
-    # Do not disturb an already-started session by deleting old questions.
-    # Newly created eligible questions can therefore reach the current session.
     if len(merged_questions) != len(current_questions):
         existing.update(
             questions=merged_questions,
@@ -1501,9 +1510,12 @@ def get_or_create_daily_session(student):
             updated_at=datetime.utcnow()
         )
 
-        return PracticeSession.objects(id=existing.id).first()
+        return PracticeSession.objects(
+            id=existing.id
+        ).first()
 
     return existing
+
 
 def submit_practice_session(session):
     if session.status == "submitted":
