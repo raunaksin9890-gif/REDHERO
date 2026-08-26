@@ -56,13 +56,13 @@ export function useReducedMotion() {
 export function AnimatedValue({ value, duration = 420 }) {
   const reducedMotion = useReducedMotion();
   const text = String(value ?? "");
-  const numeric = typeof value === "number" ? value : Number(text.replace(/[^0-9.-]/g, ""));
+  const numericText = text.replace(/[^0-9.-]/g, "");
+  const numeric = typeof value === "number" ? value : numericText ? Number(numericText) : NaN;
   const prefix = text.match(/^[^\d.-]+/)?.[0] || "";
   const suffix = text.match(/[^\d.]+$/)?.[0] || "";
   const decimals = Number.isFinite(numeric) && String(numeric).includes(".") ? 1 : 0;
   const grouped = text.includes(",");
   const [display, setDisplay] = useState(Number.isFinite(numeric) && !reducedMotion ? 0 : value);
-
   useEffect(() => {
     if (!Number.isFinite(numeric) || reducedMotion) {
       setDisplay(value);
