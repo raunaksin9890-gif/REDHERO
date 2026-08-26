@@ -1424,22 +1424,64 @@ def practice_session_json(session, include_correct=False):
 
 
 def select_daily_questions(student, limit):
-    weak_topics = list(TopicPerformance.objects(student=student, status__in=["Weak", "Needs Practice"]).order_by("accuracy")[:8])
     selected = []
     selected_ids = set()
+
+    # First include the newest questions eligible for the student's class.
+    # This makes newly added Admin/Teacher questions reach Daily Practice.
+    newest_questions = QuestionBankQuestion.objects(
+        class_level=student.class_level
+    ).order_by("-created_at")[:limit]
+
+    for question in newest_questions:
+        question_id = oid(question)
+
+        if question_id not in selected_ids:
+            selected.append(question)
+            selected_ids.add(question_id)
+
+        if len(selected) >= limit:
+            return selected
+
+    # If more questions are needed, prefer the student's weak topics.
+    weak_topics = list(
+        TopicPerformance.objects(
+            student=student,
+            status__in=["Weak", "Needs Practice"]
+        ).order_by("accuracy")[:8]
+    )
+
     for topic in weak_topics:
-        for question in QuestionBankQuestion.objects(class_level=student.class_level, subject=topic.subject, chapter=topic.chapter).order_by("-created_at")[:limit]:
-            if oid(question) not in selected_ids:
+        questions = QuestionBankQuestion.objects(
+            class_level=student.class_level,
+            subject=topic.subject,
+            chapter=topic.chapter
+        ).order_by("-created_at")[:limit]
+
+        for question in questions:
+            question_id = oid(question)
+
+            if question_id not in selected_ids:
                 selected.append(question)
-                selected_ids.add(oid(question))
+                selected_ids.add(question_id)
+
             if len(selected) >= limit:
                 return selected
-    for question in QuestionBankQuestion.objects(class_level=student.class_level).order_by("difficulty", "-created_at"):
-        if oid(question) not in selected_ids:
+
+    # Final fallback if the class has fewer/newer questions.
+    for question in QuestionBankQuestion.objects(
+        class_level=student.class_level
+    ).order_by("-created_at"):
+
+        question_id = oid(question)
+
+        if question_id not in selected_ids:
             selected.append(question)
-            selected_ids.add(oid(question))
+            selected_ids.add(question_id)
+
         if len(selected) >= limit:
             break
+
     return selected
 
 def get_or_create_daily_session(student):
