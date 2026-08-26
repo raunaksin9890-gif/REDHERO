@@ -1451,9 +1451,12 @@ def get_or_create_daily_session(student):
         session_date=key
     ).first()
 
-    # No session yet -> create today's session normally
+    # No session today -> create a new Daily Practice session
     if not existing:
-        questions = select_daily_questions(student, practice_count())
+        questions = select_daily_questions(
+            student,
+            practice_count()
+        )
 
         return PracticeSession(
             student=student,
@@ -1464,18 +1467,18 @@ def get_or_create_daily_session(student):
             total_questions=len(questions),
         ).save()
 
-    # Never modify completed/submitted attempts
+    # Never modify a completed/submitted attempt
     if existing.status != "in_progress":
         return existing
 
-    # Get latest valid questions for student's class
+    # Get the latest eligible questions for this student's class
     latest_questions = select_daily_questions(
         student,
         practice_count()
     )
 
-    # If old session contains a deleted/broken question reference,
-    # rebuild today's in-progress session using valid questions.
+    # If an old session contains a deleted/broken question reference,
+    # safely rebuild today's in-progress question list.
     try:
         current_questions = list(existing.questions or [])
     except Exception:
@@ -1489,24 +1492,25 @@ def get_or_create_daily_session(student):
             id=existing.id
         ).first()
 
-    current_ids = {
+    # Keep today's in-progress session synced with the latest
+    # eligible questions while respecting the configured question limit.
+    try:
+        current_ids = [
+            oid(question)
+            for question in current_questions
+        ]
+    except Exception:
+        current_ids = []
+
+    latest_ids = [
         oid(question)
-        for question in current_questions
-    }
+        for question in latest_questions
+    ]
 
-    merged_questions = list(current_questions)
-
-    for question in latest_questions:
-        question_id = oid(question)
-
-        if question_id not in current_ids:
-            merged_questions.append(question)
-            current_ids.add(question_id)
-
-    if len(merged_questions) != len(current_questions):
+    if current_ids != latest_ids:
         existing.update(
-            questions=merged_questions,
-            total_questions=len(merged_questions),
+            questions=latest_questions,
+            total_questions=len(latest_questions),
             updated_at=datetime.utcnow()
         )
 
