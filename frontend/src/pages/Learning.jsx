@@ -359,10 +359,12 @@ function SelectedResource({ section, item, user, onSaved, setMessage }) {
         <p>{resourceMeta(section.key, item)}</p>
       </header>
 
-      <div className="detail-section">
-        <h3>Description</h3>
-        <p>{item.description || item.summary || item.content || item.body || "No description available."}</p>
-      </div>
+      {section.key === "videos" && item.description && (
+  <div className="detail-section">
+    <h3>Description</h3>
+    <p>{item.description}</p>
+  </div>
+)}
 
       {section.key === "notes" && (
         <div className="detail-section">
