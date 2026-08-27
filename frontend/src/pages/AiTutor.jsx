@@ -47,15 +47,22 @@ export function AiTutor() {
     event.preventDefault();
     if (!message.trim()) return;
     const question = message;
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), 45000);
     setChat((items) => [...items, { role: "student", content: question }]);
     setMessage("");
     setBusy(true);
     try {
-      const result = await api("/ai/chat/", { method: "POST", body: JSON.stringify({ subject, message: question }) });
+      const result = await api("/ai/chat/", {
+        method: "POST",
+        body: JSON.stringify({ subject, message: question }),
+        signal: controller.signal,
+      });
       setChat((items) => [...items, { role: "assistant", content: result.chat.answer }]);
     } catch (err) {
       setChat((items) => [...items, { role: "assistant", content: safeAiErrorMessage(err) }]);
     } finally {
+      window.clearTimeout(timeoutId);
       setBusy(false);
     }
   }

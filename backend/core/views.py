@@ -1766,6 +1766,8 @@ def safe_ai_error_message(exc):
 def ai_chat(request):
     user = require_roles(request, [ROLE_STUDENT])
     student = get_student_for_user(user)
+    if not student:
+        return bad("Student profile is not configured", status.HTTP_404_NOT_FOUND)
     if request.method == "GET":
         rows = ChatHistory.objects(student=student).order_by("-updated_at")
         return ok({"results": [{"id": str(row.id), "subject": row.subject, "messages": [msg.to_mongo().to_dict() for msg in row.messages]} for row in rows]})
@@ -1781,30 +1783,52 @@ def ai_chat(request):
 
             google_api_key = os.environ.pop("GOOGLE_API_KEY", None)
             try:
-                client = genai.Client(api_key=settings.GEMINI_API_KEY)
+                client = genai.Client(
+                    api_key=settings.GEMINI_API_KEY,
+                    http_options=types.HttpOptions(
+                        timeout=18000,
+                        retry_options=types.HttpRetryOptions(attempts=1),
+                    ),
+                )
+                response = None
+                last_model_error = None
+                for model_name in ("gemini-3.6-flash",):
+                    try:
+                        response = client.models.generate_content(
+                            model=model_name,
+                            contents=f"Subject: {subject}\nQuestion: {prompt}",
+                            config=types.GenerateContentConfig(
+                                max_output_tokens=1200,
+                                thinking_config=types.ThinkingConfig(
+                                    thinking_level=types.ThinkingLevel.MINIMAL,
+                                ),
+                                system_instruction=(
+                                    "You are RedHero AI, an expert tutor for Maharashtra Board students.\n\n"
+                                    "Rules:\n"
+                                    "- Explain concepts step by step.\n"
+                                    "- Use simple English or Hindi when needed.\n"
+                                    "- Use proper Markdown formatting.\n"
+                                    "- Use headings, numbered steps, bullet points and tables where useful.\n"
+                                    "- Bold important formulas and final answers.\n"
+                                    "- For maths, show complete working.\n"
+                                    "- Never output raw Markdown symbols as plain text.\n"
+                                    "- Keep responses clean, readable and professional.\n"
+                                    "- End every answer with a short summary."
+                                ),
+                            ),
+                        )
+                        if (response.text or "").strip():
+                            break
+                    except Exception as model_exc:
+                        last_model_error = model_exc
+                        logger.warning("AI Tutor model %s failed: %s", model_name, model_exc.__class__.__name__)
+                        response = None
+                if response is None:
+                    raise last_model_error or RuntimeError("No Gemini model returned a response")
             finally:
                 if google_api_key is not None:
                     os.environ["GOOGLE_API_KEY"] = google_api_key
-            response = client.models.generate_content(
-                model="gemini-flash-latest",
-                contents=f"Subject: {subject}\nQuestion: {prompt}",
-                config=types.GenerateContentConfig(
-                    system_instruction=(
-                        "You are RedHero AI, an expert tutor for Maharashtra Board students.\n\n"
-                        "Rules:\n"
-                        "- Explain concepts step by step.\n"
-                        "- Use simple English or Hindi when needed.\n"
-                        "- Use proper Markdown formatting.\n"
-                        "- Use headings, numbered steps, bullet points and tables where useful.\n"
-                        "- Bold important formulas and final answers.\n"
-                        "- For maths, show complete working.\n"
-                        "- Never output raw Markdown symbols as plain text.\n"
-                        "- Keep responses clean, readable and professional.\n"
-                        "- End every answer with a short summary."
-                    )
-                ),
-            )
-            answer = response.text
+            answer = (response.text or "").strip() or "Gemini returned an empty response. Please try again."
         except Exception as exc:
             logger.exception("AI Tutor request failed")
             answer = safe_ai_error_message(exc)
