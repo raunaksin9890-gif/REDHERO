@@ -1494,20 +1494,94 @@ function FeePaymentForm({ students = [], paymentModes = [], onSaved, setMessage 
   );
 }
 
-function AttendanceTable({ user, rows, onSaved, setMessage }) {
-  return <EditableTable
-    rows={rows}
-    columns={[["Date", (row) => formatDate(row.date)], ["Student", (row) => row.student?.name || "-"], ["Subject", () => "Not recorded"], ["Marked By", (row) => row.marked_by?.name || "-"], ["Status", (row) => <StatusBadge value={row.status} />]]}
-    editFields={[["status", "select", ["present", "absent"]]]}
-    canEdit={user.role !== "student"}
-    canDelete={user.role === "super_admin"}
-    onSave={(row, draft) => api("/attendance/", { method: "PUT", body: JSON.stringify({ id: row.id, status: draft.status }) })}
-    onDelete={(row) => api(`/attendance/?id=${row.id}`, { method: "DELETE" })}
-    onSaved={onSaved}
-    setMessage={setMessage}
-    extraActions={(row) => user.role === "super_admin" && <AttendanceLock row={row} onSaved={onSaved} setMessage={setMessage} />}
-  />;
-}
+function AttendanceTable({
+  user,
+  rows,
+  onSaved,
+  setMessage,
+}) {
+  return (
+    <EditableTable
+      rows={rows}
+      columns={[
+        ["Date", (row) => formatDate(row.date)],
+
+        [
+          "Student",
+          (row) => row.student?.name || "-"
+        ],
+
+        [
+          "Subject",
+          (row) => row.subject || "Unknown"
+        ],
+
+        [
+          "Marked By",
+          (row) => row.marked_by?.name || "-"
+        ],
+
+        [
+          "Status",
+          (row) => <StatusBadge value={row.status} />
+        ],
+
+        [
+          "Early Leave",
+          (row) =>
+            row.left_early
+              ? `Yes${row.leave_time ? ` · ${formatDateTime(row.leave_time)}` : ""}`
+              : "No"
+        ],
+
+        [
+          "Reason",
+          (row) =>
+            row.left_early
+              ? row.leave_reason || "-"
+              : "-"
+        ],
+      ]}
+      editFields={[
+        ["status", "select", ["present", "absent"]],
+        ["left_early", "select", [true, false]],
+        ["leave_reason"],
+      ]}
+      canEdit={user.role !== "student"}
+      canDelete={user.role === "super_admin"}
+      onSave={(row, draft) =>
+        api("/attendance/", {
+          method: "PUT",
+          body: JSON.stringify({
+            id: row.id,
+            status: draft.status,
+            left_early:
+              draft.left_early === true ||
+              draft.left_early === "true",
+            leave_reason:
+              draft.leave_reason || "",
+          }),
+        })
+      }
+      onDelete={(row) =>
+        api(`/attendance/?id=${row.id}`, {
+          method: "DELETE",
+        })
+      }
+      onSaved={onSaved}
+      setMessage={setMessage}
+      extraActions={(row) =>
+        user.role === "super_admin" && (
+          <AttendanceLock
+            row={row}
+            onSaved={onSaved}
+            setMessage={setMessage}
+          />
+        )
+      }
+    />
+  );
+      }
 
 function MarksTable({ user, rows, onSaved, setMessage }) {
   return <EditableTable
