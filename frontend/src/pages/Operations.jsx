@@ -202,22 +202,64 @@ function OperationsDetail({ active, data, user, onSaved, setMessage }) {
 
 function AttendanceDetail({ data, user, onSaved, setMessage }) {
   const summary = attendanceSummary(data.attendance);
+
+  const leaveCount = data.attendance.filter(
+    (row) => row.left_early === true
+  ).length;
+
   return (
     <div className="ops-detail-grid">
-      {user.role !== "student" && <AttendanceQuickMark attendance={data.attendance} students={data.students} onSaved={onSaved} setMessage={setMessage} />}
-      {user.role !== "student" && <AttendanceForm students={data.students} onSaved={onSaved} setMessage={setMessage} />}
-      <MetricDeck metrics={[["Overall Attendance", formatPercent(summary.percent)], ["Present", summary.present], ["Absent", summary.absent], ["Leave", "Not tracked"]]} />
+      {user.role !== "student" && (
+        <AttendanceQuickMark
+          attendance={data.attendance}
+          students={data.students}
+          onSaved={onSaved}
+          setMessage={setMessage}
+        />
+      )}
+
+      {user.role !== "student" && (
+        <AttendanceForm
+          students={data.students}
+          onSaved={onSaved}
+          setMessage={setMessage}
+        />
+      )}
+
+      <MetricDeck
+        metrics={[
+          ["Overall Attendance", formatPercent(summary.percent)],
+          ["Present", summary.present],
+          ["Absent", summary.absent],
+          ["Leave", leaveCount],
+        ]}
+      />
+
       <Panel title="Attendance Trend" icon={Activity} className="span-2">
-        <LineChart values={monthlyAttendance(data.attendance).map((item) => item.percent)} />
+        <LineChart
+          values={monthlyAttendance(data.attendance).map(
+            (item) => item.percent
+          )}
+        />
       </Panel>
+
       <Panel title="Attendance By Subject" icon={BarChart3}>
         <DonutChart percent={summary.percent} />
         <SubjectBreakdown rows={subjectAttendance(data.attendance)} />
       </Panel>
+
       <Panel title="Attendance History" icon={ClipboardCheck} className="span-3">
-        <AttendanceTable user={user} rows={data.attendance} onSaved={onSaved} setMessage={setMessage} />
+        <AttendanceTable
+          user={user}
+          rows={data.attendance}
+          onSaved={onSaved}
+          setMessage={setMessage}
+        />
       </Panel>
-      {user.role === "super_admin" && <AuditPanel items={data.audit} />}
+
+      {user.role === "super_admin" && (
+        <AuditPanel items={data.audit} />
+      )}
     </div>
   );
 }
