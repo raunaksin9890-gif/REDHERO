@@ -543,76 +543,286 @@ def teacher_detail(request, teacher_id):
 
 @api_view(["GET", "POST", "PUT", "DELETE"])
 def attendance(request):
-    user = require_roles(request, [ROLE_ADMIN, ROLE_TEACHER, ROLE_STUDENT])
+    user = require_roles(
+        request,
+        [ROLE_ADMIN, ROLE_TEACHER, ROLE_STUDENT]
+    )
+
     if request.method == "GET":
         if user.role == ROLE_STUDENT:
-            rows = Attendance.objects(student=get_student_for_user(user)).order_by("-date")
+            rows = Attendance.objects(
+                student=get_student_for_user(user)
+            ).order_by("-date")
+
         elif user.role == ROLE_TEACHER:
-            rows = Attendance.objects(class_level__in=teacher_classes(user)).order_by("-date")
+            rows = Attendance.objects(
+                class_level__in=teacher_classes(user)
+            ).order_by("-date")
+
         else:
             rows = Attendance.objects.order_by("-date")
-        return ok({"results": [attendance_json(row) for row in rows]})
-    require_roles(request, [ROLE_ADMIN, ROLE_TEACHER])
+
+        return ok({
+            "results": [
+                attendance_json(row)
+                for row in rows
+            ]
+        })
+
+    require_roles(
+        request,
+        [ROLE_ADMIN, ROLE_TEACHER]
+    )
+
     data = request.data
+
+    # ==========================================
+    # UPDATE / DELETE ATTENDANCE
+    # ==========================================
     if request.method in ["PUT", "DELETE"]:
-        row = Attendance.objects(id=data.get("id") or request.GET.get("id")).first()
+
+        row = Attendance.objects(
+            id=data.get("id") or request.GET.get("id")
+        ).first()
+
         if not row:
-            return bad("Attendance not found", status.HTTP_404_NOT_FOUND)
-        enforce_teacher_class(user, row.class_level)
+            return bad(
+                "Attendance not found",
+                status.HTTP_404_NOT_FOUND
+            )
+
+        enforce_teacher_class(
+            user,
+            row.class_level
+        )
+
         if is_locked(row) and user.role != ROLE_ADMIN:
-            return bad("Attendance record is locked", status.HTTP_403_FORBIDDEN)
+            return bad(
+                "Attendance record is locked",
+                status.HTTP_403_FORBIDDEN
+            )
+
+        # ======================================
+        # DELETE
+        # ======================================
         if request.method == "DELETE":
-            require_roles(request, [ROLE_ADMIN])
+            require_roles(
+                request,
+                [ROLE_ADMIN]
+            )
+
             before = attendance_json(row)
+
             row.delete()
-            log_attendance("delete", user, row, before=before)
-            return ok({"message": "Attendance deleted"})
+
+            log_attendance(
+                "delete",
+                user,
+                row,
+                before=before
+            )
+
+            return ok({
+                "message": "Attendance deleted"
+            })
+
+        # ======================================
+        # UPDATE
+        # ======================================
         before = attendance_json(row)
-        row.update(status=data.get("status", row.status), marked_by=user, updated_at=datetime.utcnow())
-        updated = Attendance.objects(id=row.id).first()
-        log_attendance("update", user, updated, before=before, after=attendance_json(updated))
+
+        left_early = bool(
+            data.get(
+                "left_early",
+                getattr(row, "left_early", False)
+            )
+        )
+
+        leave_time_value = getattr(
+            row,
+            "leave_time",
+            None
+        )
+
+        if left_early:
+            if data.get("leave_time"):
+                leave_time_value = parse_date(
+                    data.get("leave_time")
+                )
+
+            elif not leave_time_value:
+                leave_time_value = datetime.utcnow()
+
+        else:
+            leave_time_value = None
+
+        leave_reason = (
+            data.get(
+                "leave_reason",
+                getattr(row, "leave_reason", "")
+            )
+            or ""
+        )
+
+        if not left_early:
+            leave_reason = ""
+
+        row.update(
+            status=data.get(
+                "status",
+                row.status
+            ),
+            left_early=left_early,
+            leave_time=leave_time_value,
+            leave_reason=leave_reason,
+            marked_by=user,
+            updated_at=datetime.utcnow(),
+        )
+
+        updated = Attendance.objects(
+            id=row.id
+        ).first()
+
+        log_attendance(
+            "update",
+            user,
+            updated,
+            before=before,
+            after=attendance_json(updated)
+        )
+
         notify_student(
             updated.student,
             "attendance",
             "Attendance",
-            f"Your attendance for {updated.date.strftime('%d %b %Y')} was updated.",
+            f"Your attendance for "
+            f"{updated.date.strftime('%d %b %Y')} "
+            f"was updated.",
             "/operations",
             "green",
             "attendance",
             updated.id,
         )
-        return ok({"attendance": attendance_json(updated)})
-    student = Student.objects(id=data.get("student")).first()
+
+        return ok({
+            "attendance": attendance_json(updated)
+        })
+
+    # ==========================================
+    # CREATE / MARK ATTENDANCE
+    # ==========================================
+    student = Student.objects(
+        id=data.get("student")
+    ).first()
+
     if not student:
-        return bad("Student not found", status.HTTP_404_NOT_FOUND)
-    enforce_teacher_student(user, student)
-    date = parse_date(data.get("date"))
-    row = Attendance.objects(student=student, date=date).first()
-    if row and is_locked(row) and user.role != ROLE_ADMIN:
-        return bad("Attendance record is locked", status.HTTP_403_FORBIDDEN)
+        return bad(
+            "Student not found",
+            status.HTTP_404_NOT_FOUND
+        )
+
+    enforce_teacher_student(
+        user,
+        student
+    )
+
+    date = parse_date(
+        data.get("date")
+    )
+
+    row = Attendance.objects(
+        student=student,
+        date=date
+    ).first()
+
+    if (
+        row
+        and is_locked(row)
+        and user.role != ROLE_ADMIN
+    ):
+        return bad(
+            "Attendance record is locked",
+            status.HTTP_403_FORBIDDEN
+        )
+
     now = datetime.utcnow()
-    row = Attendance.objects(student=student, date=date).modify(
+
+    left_early = bool(
+        data.get("left_early", False)
+    )
+
+    leave_time_value = None
+
+    if left_early:
+        if data.get("leave_time"):
+            leave_time_value = parse_date(
+                data.get("leave_time")
+            )
+        else:
+            leave_time_value = now
+
+    leave_reason = (
+        data.get("leave_reason", "")
+        or ""
+    )
+
+    if not left_early:
+        leave_reason = ""
+
+    row = Attendance.objects(
+        student=student,
+        date=date
+    ).modify(
         upsert=True,
         new=True,
+
         set__class_level=student.class_level,
-        set__status=data.get("status", "present"),
+
+        set__status=data.get(
+            "status",
+            "present"
+        ),
+
+        set__left_early=left_early,
+
+        set__leave_time=leave_time_value,
+
+        set__leave_reason=leave_reason,
+
         set__marked_by=user,
+
         set__updated_at=now,
+
         set_on_insert__created_at=now,
     )
-    log_attendance("create", user, row, after=attendance_json(row))
+
+    log_attendance(
+        "create",
+        user,
+        row,
+        after=attendance_json(row)
+    )
+
     notify_student(
         row.student,
         "attendance",
         "Attendance",
-        f"Your attendance for {row.date.strftime('%d %b %Y')} was marked.",
+        f"Your attendance for "
+        f"{row.date.strftime('%d %b %Y')} "
+        f"was marked.",
         "/operations",
         "green",
         "attendance",
         row.id,
     )
-    return ok({"message": "Attendance saved", "attendance": attendance_json(row)}, status.HTTP_201_CREATED)
 
+    return ok(
+        {
+            "message": "Attendance saved",
+            "attendance": attendance_json(row),
+        },
+        status.HTTP_201_CREATED
+    )
 
 @api_view(["POST"])
 def attendance_lock(request, attendance_id):
