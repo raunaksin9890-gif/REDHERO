@@ -1152,38 +1152,173 @@ function AttendanceQuickMark({ attendance = [], students = [], onSaved, setMessa
 }
 
 function AttendanceForm({ students, onSaved, setMessage }) {
-  const [form, setForm] = useState({ student: "", date: new Date().toISOString().slice(0, 10), status: "present" });
+  const [form, setForm] = useState({
+    student: "",
+    date: new Date().toISOString().slice(0, 10),
+    status: "present",
+    left_early: false,
+    leave_time: "",
+    leave_reason: "",
+  });
+
   const toast = useToast();
+
   async function submit(event) {
     event.preventDefault();
+
     try {
-      await api("/attendance/", { method: "POST", body: JSON.stringify(form) });
+      const payload = {
+        ...form,
+        leave_time:
+          form.left_early && form.leave_time
+            ? `${form.date}T${form.leave_time}:00`
+            : null,
+        leave_reason: form.left_early
+          ? form.leave_reason
+          : "",
+      };
+
+      await api("/attendance/", {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+
       setMessage("Attendance saved");
-      toast?.show("Attendance saved");
+      toast?.show(
+        form.left_early
+          ? "Attendance saved with early leave"
+          : "Attendance saved"
+      );
+
+      setForm({
+        student: "",
+        date: new Date().toISOString().slice(0, 10),
+        status: "present",
+        left_early: false,
+        leave_time: "",
+        leave_reason: "",
+      });
+
       onSaved();
     } catch (err) {
       setMessage(err.message);
       toast?.show(err.message, "error");
     }
   }
+
   return (
-    <Panel title="Individual Attendance Correction" icon={Plus} className="span-3">
+    <Panel
+      title="Individual Attendance Correction"
+      icon={Plus}
+      className="span-3"
+    >
       <form className="ops-form" onSubmit={submit}>
-        <select value={form.student} onChange={(event) => setForm({ ...form, student: event.target.value })} required>
+        <select
+          value={form.student}
+          onChange={(event) =>
+            setForm({
+              ...form,
+              student: event.target.value,
+            })
+          }
+          required
+        >
           <option value="">Select student</option>
-          {students.map((student) => <option key={student.id} value={student.id}>{student.name} / Class {student.class_level}</option>)}
+
+          {students.map((student) => (
+            <option key={student.id} value={student.id}>
+              {student.name} / Class {student.class_level}
+            </option>
+          ))}
         </select>
-        <input type="date" value={form.date} onChange={(event) => setForm({ ...form, date: event.target.value })} required />
-        <select value={form.status} onChange={(event) => setForm({ ...form, status: event.target.value })}>
+
+        <input
+          type="date"
+          value={form.date}
+          onChange={(event) =>
+            setForm({
+              ...form,
+              date: event.target.value,
+            })
+          }
+          required
+        />
+
+        <select
+          value={form.status}
+          onChange={(event) =>
+            setForm({
+              ...form,
+              status: event.target.value,
+            })
+          }
+        >
           <option value="present">Present</option>
           <option value="absent">Absent</option>
         </select>
-        <button className="ops-red-button"><Save size={16} /> Save</button>
+
+        <label>
+          <input
+            type="checkbox"
+            checked={form.left_early}
+            onChange={(event) =>
+              setForm({
+                ...form,
+                left_early: event.target.checked,
+                leave_time: event.target.checked
+                  ? form.leave_time
+                  : "",
+                leave_reason: event.target.checked
+                  ? form.leave_reason
+                  : "",
+              })
+            }
+          />
+
+          Left Early
+        </label>
+
+        {form.left_early && (
+          <>
+            <label>
+              Leave Time
+              <input
+                type="time"
+                value={form.leave_time}
+                onChange={(event) =>
+                  setForm({
+                    ...form,
+                    leave_time: event.target.value,
+                  })
+                }
+                required
+              />
+            </label>
+
+            <label>
+              Leave Reason
+              <input
+                type="text"
+                value={form.leave_reason}
+                placeholder="Optional reason"
+                onChange={(event) =>
+                  setForm({
+                    ...form,
+                    leave_reason: event.target.value,
+                  })
+                }
+              />
+            </label>
+          </>
+        )}
+
+        <button className="ops-red-button">
+          <Save size={16} /> Save
+        </button>
       </form>
     </Panel>
   );
-}
-
+          }
 function MarksForm({ students, onSaved, setMessage }) {
   const [form, setForm] = useState({ student: "", subject: "", exam_type: "Unit Test", marks_obtained: "", max_marks: "100" });
   const toast = useToast();
