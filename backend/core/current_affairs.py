@@ -2,6 +2,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time as time_module
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
@@ -26,6 +27,9 @@ CURRENT_AFFAIRS_FEEDS = [
 ]
 DEFAULT_GROQ_MODEL = "openai/gpt-oss-20b"
 DEFAULT_GROQ_BATCH_SIZE = 4
+AUTO_UPDATE_RETRY_MINUTES = 60
+_AUTO_UPDATE_LOCK = threading.Lock()
+_AUTO_UPDATE_LAST_ATTEMPT = None
 ALLOWED_CATEGORIES = {
     "India",
     "Education",
@@ -73,6 +77,41 @@ class SourceArticle:
 def can_run_daily_update(now=None):
     current = now.astimezone(IST) if now else datetime.now(IST)
     return current.time() >= time(6, 0)
+
+
+def today_digest_count(now=None):
+    current = now.astimezone(IST) if now else datetime.now(IST)
+    return CurrentAffair.objects(digest_date=current.date().isoformat()).count()
+
+
+def maybe_auto_update_current_affairs(target_count=8, now=None):
+    global _AUTO_UPDATE_LAST_ATTEMPT
+
+    try:
+        desired_count = max(1, min(int(target_count), 10))
+    except (TypeError, ValueError):
+        desired_count = 8
+    current = now.astimezone(IST) if now else datetime.now(IST)
+    if not can_run_daily_update(current):
+        return {"skipped": "before_daily_window"}
+    if today_digest_count(current) >= desired_count:
+        return {"skipped": "already_current"}
+    if _AUTO_UPDATE_LAST_ATTEMPT and current - _AUTO_UPDATE_LAST_ATTEMPT < timedelta(minutes=AUTO_UPDATE_RETRY_MINUTES):
+        return {"skipped": "recently_attempted"}
+    if not _AUTO_UPDATE_LOCK.acquire(blocking=False):
+        return {"skipped": "already_running"}
+    try:
+        if today_digest_count(current) >= desired_count:
+            return {"skipped": "already_current"}
+        _AUTO_UPDATE_LAST_ATTEMPT = current
+        result = update_current_affairs(target_count=desired_count)
+        logger.info("Current affairs auto-update result: %s", result)
+        return result
+    except Exception as exc:
+        logger.warning("Current affairs auto-update failed: %s", exc, exc_info=True)
+        return {"skipped": "failed", "error": exc.__class__.__name__}
+    finally:
+        _AUTO_UPDATE_LOCK.release()
 
 
 def fetch_source_articles(limit=25, timeout=12):

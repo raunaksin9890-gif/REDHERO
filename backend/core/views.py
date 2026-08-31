@@ -9,6 +9,7 @@ from urllib.parse import unquote, urlparse
 from uuid import uuid4
 
 import jwt
+from bson.dbref import DBRef
 from django.conf import settings
 from django.core.files.storage import default_storage
 from django.http import HttpResponse
@@ -50,6 +51,7 @@ from .models import (
     Video,
 )
 from .notifications import notify_admins, notify_all_students, notify_student, notify_students_for_class
+from .current_affairs import maybe_auto_update_current_affairs
 from .security import create_token, current_user, hash_password, require_roles, verify_password
 from .serializers import (
     attendance_json,
@@ -70,6 +72,34 @@ logger = logging.getLogger(__name__)
 FORGOT_PASSWORD_VERIFY_ERROR = "Unable to verify the provided account details."
 FORGOT_PASSWORD_TOKEN_MINUTES = 15
 FORGOT_PASSWORD_ATTEMPTS = {}
+DASHBOARD_ATTENDANCE_FIELDS = frozenset(
+    {"_id", "student", "class_level", "date", "status", "marked_by", "created_at", "updated_at"}
+)
+DASHBOARD_MARKS_FIELDS = frozenset(
+    {"_id", "student", "class_level", "subject", "exam_type", "marks_obtained", "max_marks", "added_by", "created_at"}
+)
+DASHBOARD_PRACTICE_SESSION_FIELDS = frozenset(
+    {
+        "_id",
+        "student",
+        "session_type",
+        "session_date",
+        "class_level",
+        "subject",
+        "status",
+        "questions",
+        "answers",
+        "total_questions",
+        "correct_count",
+        "incorrect_count",
+        "score",
+        "accuracy",
+        "topic_performance",
+        "started_at",
+        "submitted_at",
+        "updated_at",
+    }
+)
 
 LEARNING_DOCUMENT_EXTENSIONS = {
     ".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx",
@@ -186,10 +216,79 @@ def visible_class_levels(user):
     return [student.class_level] if student else []
 
 
+def raw_reference_id(value):
+    if isinstance(value, DBRef):
+        return value.id
+    if isinstance(value, dict):
+        return value.get("$id") or value.get("id")
+    return value
+
+
+def raw_reference_key(value):
+    ref_id = raw_reference_id(value)
+    return str(ref_id) if ref_id else ""
+
+
+def dashboard_student_query(student):
+    collection_name = Student._get_collection().name
+    return {"student": {"$in": [student.id, DBRef(collection_name, student.id)]}}
+
+
+def dashboard_raw_rows(model, query, expected_fields, context):
+    rows = list(model._get_collection().find(query))
+    for row in rows:
+        extra_fields = sorted(set(row.keys()) - expected_fields)
+        if extra_fields:
+            logger.warning(
+                "Ignoring legacy fields on %s dashboard row %s for %s: %s",
+                model.__name__,
+                row.get("_id"),
+                context,
+                ", ".join(extra_fields),
+            )
+    return rows
+
+
+def dashboard_float(value, default=0.0):
+    try:
+        return float(value or default)
+    except (TypeError, ValueError):
+        return default
+
+
+def dashboard_int(value, default=0):
+    try:
+        return int(value or default)
+    except (TypeError, ValueError):
+        return default
+
+
+def dashboard_marks_json(row, student):
+    marks_obtained = dashboard_float(row.get("marks_obtained"))
+    max_marks = dashboard_float(row.get("max_marks"))
+    percent = round((marks_obtained / max_marks) * 100, 2) if max_marks else 0
+    return {
+        "id": str(row.get("_id")) if row.get("_id") else None,
+        "student": student_json(student) if student else None,
+        "class_level": row.get("class_level", ""),
+        "subject": row.get("subject", ""),
+        "exam_type": row.get("exam_type", ""),
+        "marks_obtained": marks_obtained,
+        "max_marks": max_marks,
+        "percentage": percent,
+    }
+
+
 def practice_streak_json(student):
-    raw_dates = PracticeSession.objects(student=student, status="submitted").distinct("session_date")
+    rows = dashboard_raw_rows(
+        PracticeSession,
+        {**dashboard_student_query(student), "status": "submitted"},
+        DASHBOARD_PRACTICE_SESSION_FIELDS,
+        f"student {student.id} practice streak",
+    )
     practice_dates = set()
-    for value in raw_dates:
+    for row in rows:
+        value = row.get("session_date")
         try:
             practice_dates.add(datetime.strptime(value, "%Y-%m-%d").date())
         except (TypeError, ValueError):
@@ -226,22 +325,46 @@ def class_leaderboard(class_level, current_student=None, limit=10):
     practice_totals = {}
     mark_totals = {}
 
-    for session in PracticeSession.objects(class_level=class_level, status="submitted"):
-        student_id = str(session.student.id) if session.student else ""
+    practice_rows = dashboard_raw_rows(
+        PracticeSession,
+        {"class_level": class_level, "status": "submitted"},
+        DASHBOARD_PRACTICE_SESSION_FIELDS,
+        f"class {class_level} leaderboard",
+    )
+    for session in practice_rows:
+        student_id = raw_reference_key(session.get("student"))
         if student_id not in student_ids:
+            logger.warning(
+                "Skipping PracticeSession %s in dashboard leaderboard because student reference %s is missing or outside class %s",
+                session.get("_id"),
+                student_id or "<empty>",
+                class_level,
+            )
             continue
         bucket = practice_totals.setdefault(student_id, {"correct": 0, "total": 0, "sessions": 0})
-        bucket["correct"] += int(session.correct_count or 0)
-        bucket["total"] += int(session.total_questions or 0)
+        bucket["correct"] += dashboard_int(session.get("correct_count"))
+        bucket["total"] += dashboard_int(session.get("total_questions"))
         bucket["sessions"] += 1
 
-    for mark in Marks.objects(class_level=class_level):
-        student_id = str(mark.student.id) if mark.student else ""
+    mark_rows = dashboard_raw_rows(
+        Marks,
+        {"class_level": class_level},
+        DASHBOARD_MARKS_FIELDS,
+        f"class {class_level} leaderboard",
+    )
+    for mark in mark_rows:
+        student_id = raw_reference_key(mark.get("student"))
         if student_id not in student_ids:
+            logger.warning(
+                "Skipping Marks %s in dashboard leaderboard because student reference %s is missing or outside class %s",
+                mark.get("_id"),
+                student_id or "<empty>",
+                class_level,
+            )
             continue
         bucket = mark_totals.setdefault(student_id, {"obtained": 0.0, "maximum": 0.0})
-        bucket["obtained"] += float(mark.marks_obtained or 0)
-        bucket["maximum"] += float(mark.max_marks or 0)
+        bucket["obtained"] += dashboard_float(mark.get("marks_obtained"))
+        bucket["maximum"] += dashboard_float(mark.get("max_marks"))
 
     rows = []
     for student in students:
@@ -753,18 +876,31 @@ def dashboard(request):
                 "students": Student.objects(class_level__in=assigned).count(),
                 "recent_notices": [notice_json(row) for row in Notice.objects(class_level__in=assigned + ["all"]).order_by("-created_at")[:5]],
             }
-        )
+    )
     student = get_student_for_user(user)
-    attendance = list(Attendance.objects(student=student))
-    present = len([row for row in attendance if row.status == "present"])
-    marks = list(Marks.objects(student=student))
+    if not student:
+        return bad("Student profile not found", status.HTTP_404_NOT_FOUND)
+    maybe_auto_update_current_affairs(target_count=8)
+    attendance = dashboard_raw_rows(
+        Attendance,
+        dashboard_student_query(student),
+        DASHBOARD_ATTENDANCE_FIELDS,
+        f"student {student.id}",
+    )
+    present = len([row for row in attendance if row.get("status") == "present"])
+    marks = dashboard_raw_rows(
+        Marks,
+        dashboard_student_query(student),
+        DASHBOARD_MARKS_FIELDS,
+        f"student {student.id}",
+    )
     notices = Notice.objects(class_level__in=[student.class_level, "all"]).order_by("-created_at")[:5]
     leaderboard, leaderboard_rank = class_leaderboard(student.class_level, current_student=student)
     return ok(
         {
             "profile": student_json(student),
             "attendance_percentage": round((present / len(attendance)) * 100, 2) if attendance else 0,
-            "marks": [marks_json(row) for row in marks[-5:]],
+            "marks": [dashboard_marks_json(row, student) for row in marks[-5:]],
             "latest_notices": [notice_json(row) for row in notices],
             "current_affairs": [simple_json(row, ["title", "summary", "category", "image_url", "published_on"]) for row in CurrentAffair.objects.order_by("-published_on")[:4]],
             "recent_videos": [simple_json(row, ["title", "class_level", "subject", "chapter", "youtube_url", "file_name", "file_type", "file_size"]) for row in Video.objects(class_level=student.class_level).order_by("-created_at")[:4]],
@@ -1582,6 +1718,7 @@ def current_affairs(request):
     user = current_user(request)
     fields = ["title", "summary", "content", "category", "source_url", "source_name", "image_url", "generated_by_ai", "digest_date", "published_on"]
     if request.method == "GET":
+        maybe_auto_update_current_affairs(target_count=8)
         return ok({"results": [simple_json(row, fields) for row in CurrentAffair.objects.order_by("-published_on")]})
     require_roles(request, [ROLE_ADMIN])
     if request.method in ["PUT", "DELETE"]:

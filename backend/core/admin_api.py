@@ -48,6 +48,7 @@ from .models import (
     User,
     Video,
 )
+from .current_affairs import maybe_auto_update_current_affairs
 from .notifications import notify_all_students, notify_student, notify_students_for_class
 from .security import current_user, hash_password, require_roles
 from .services import next_code, parse_date, schedule_now, schedule_time, store_schedule_time
@@ -1086,6 +1087,7 @@ def current_affairs(request):
     user = current_user(request)
     fields = ["title", "summary", "content", "category", "source_url", "source_name", "image_url", "generated_by_ai", "digest_date", "published_on"]
     if request.method == "GET":
+        maybe_auto_update_current_affairs(target_count=8)
         return ok({"results": [simple_json(row, fields) for row in CurrentAffair.objects.order_by("-published_on")]})
     require_roles(request, [ROLE_ADMIN])
     data = request.data
