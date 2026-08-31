@@ -1013,8 +1013,28 @@ def attendance(request):
         if request.method == "DELETE":
             row.delete()
             return ok({"message": "Attendance deleted"})
-        status_value = request.data.get("status", row.status)
-        row.update(status=status_value, marked_by=user, updated_at=datetime.utcnow())
+        try:
+            from .admin_api import attendance_leave_fields, attendance_status_value, attendance_subject_for
+
+            status_value = attendance_status_value(request.data, row)
+            leave_fields = attendance_leave_fields(request.data, row)
+            subject = getattr(row, "subject", "") or ""
+            if "subject" in request.data:
+                subject = attendance_subject_for(user, row.class_level, request.data.get("subject"))
+        except (TypeError, ValueError) as exc:
+            return bad(str(exc))
+        try:
+            row.update(
+                status=status_value,
+                subject=subject,
+                left_early=leave_fields["left_early"],
+                leave_time=leave_fields["leave_time"],
+                leave_reason=leave_fields["leave_reason"],
+                marked_by=user,
+                updated_at=datetime.utcnow(),
+            )
+        except ValidationError:
+            return bad("Attendance data is invalid.")
         updated = Attendance.objects(id=row.id).first()
         notify_student(
             updated.student,
@@ -1032,16 +1052,32 @@ def attendance(request):
     if not student:
         return bad("Student not found", status.HTTP_404_NOT_FOUND)
     enforce_teacher_student(user, student)
+    try:
+        from .admin_api import attendance_date_value, attendance_leave_fields, attendance_status_value, attendance_subject_for
+
+        attendance_date = attendance_date_value(request.data)
+        status_value = attendance_status_value(request.data)
+        subject = attendance_subject_for(user, student.class_level, request.data.get("subject"))
+        leave_fields = attendance_leave_fields(request.data)
+    except (TypeError, ValueError) as exc:
+        return bad(str(exc))
     now = datetime.utcnow()
-    row = Attendance.objects(student=student, date=parse_date(data.get("date"))).modify(
-        upsert=True,
-        new=True,
-        set__class_level=student.class_level,
-        set__status=data.get("status"),
-        set__marked_by=user,
-        set__updated_at=now,
-        set_on_insert__created_at=now,
-    )
+    try:
+        row = Attendance.objects(student=student, date=attendance_date).modify(
+            upsert=True,
+            new=True,
+            set__class_level=student.class_level,
+            set__status=status_value,
+            set__subject=subject,
+            set__left_early=leave_fields["left_early"],
+            set__leave_time=leave_fields["leave_time"],
+            set__leave_reason=leave_fields["leave_reason"],
+            set__marked_by=user,
+            set__updated_at=now,
+            set_on_insert__created_at=now,
+        )
+    except ValidationError:
+        return bad("Attendance data is invalid.")
     notify_student(
         row.student,
         "attendance",
@@ -1062,19 +1098,31 @@ def attendance_bulk(request):
     if not class_level:
         return bad("Class is required")
     enforce_teacher_class(user, class_level)
+    try:
+        from .admin_api import attendance_subject_for
+
+        subject = attendance_subject_for(user, class_level, request.data.get("subject"))
+    except (TypeError, ValueError) as exc:
+        return bad(str(exc))
 
     students = list(Student.objects(class_level=class_level).order_by("roll_number"))
     if not students:
         return bad("No students found for this class", status.HTTP_404_NOT_FOUND)
 
-    absent_ids = {str(value) for value in request.data.get("absent_student_ids", [])}
+    raw_absent_ids = request.data.get("absent_student_ids", [])
+    if not isinstance(raw_absent_ids, list):
+        return bad("Absent student IDs must be a list.")
+    absent_ids = {str(value) for value in raw_absent_ids}
     allowed_ids = {str(student.id) for student in students}
     if not absent_ids.issubset(allowed_ids):
         return bad("One or more selected students are outside this class")
 
-    attendance_date = parse_date(request.data.get("date"))
-    if not attendance_date:
-        return bad("Attendance date is required")
+    try:
+        from .admin_api import attendance_date_value
+
+        attendance_date = attendance_date_value(request.data)
+    except (TypeError, ValueError) as exc:
+        return bad(str(exc))
 
     now = datetime.utcnow()
     results = []
@@ -1089,6 +1137,7 @@ def attendance_bulk(request):
             new=True,
             set__class_level=student.class_level,
             set__status=attendance_status,
+            set__subject=subject,
             set__marked_by=user,
             set__updated_at=now,
             set_on_insert__created_at=now,

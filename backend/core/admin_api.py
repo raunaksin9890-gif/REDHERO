@@ -146,6 +146,58 @@ def enforce_teacher_subject(user, subject):
         raise PermissionDenied("Teachers can only access assigned subjects")
 
 
+def attendance_subject_for(user, class_level, requested_subject=None):
+    subject = str(requested_subject or "").strip()
+    if user.role == ROLE_TEACHER:
+        enforce_teacher_class(user, class_level)
+        subjects = [str(item).strip() for item in teacher_subjects(user) if str(item).strip()]
+        if not subjects:
+            raise PermissionDenied("Teacher has no assigned subjects")
+        if subject:
+            matched = next((item for item in subjects if item.lower() == subject.lower()), None)
+            if not matched:
+                raise PermissionDenied("Teachers can only access assigned subjects")
+            subject = matched
+        elif len(subjects) == 1:
+            subject = subjects[0]
+    if not subject:
+        raise ValueError("Subject is required for attendance.")
+    return subject
+
+
+def attendance_date_value(data, row=None):
+    value = data.get("date", getattr(row, "date", None))
+    if value in [None, ""]:
+        raise ValueError("Attendance date is required.")
+    try:
+        return parse_date(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Attendance date must be valid.") from exc
+
+
+def attendance_status_value(data, row=None):
+    value = str(data.get("status", getattr(row, "status", "")) or "").strip().lower()
+    if value not in {"present", "absent"}:
+        raise ValueError("Attendance status must be present or absent.")
+    return value
+
+
+def attendance_leave_fields(data, row=None):
+    raw_leave_time = data.get("leave_time", getattr(row, "leave_time", None))
+    if raw_leave_time in [None, ""]:
+        leave_time = None
+    else:
+        try:
+            leave_time = parse_date(raw_leave_time)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Leave time must be valid.") from exc
+    return {
+        "left_early": bool_value(data.get("left_early", getattr(row, "left_early", False))),
+        "leave_time": leave_time,
+        "leave_reason": str(data.get("leave_reason", getattr(row, "leave_reason", "")) or "").strip(),
+    }
+
+
 def enforce_teacher_question_scope(user, class_level, subject):
     enforce_teacher_class(user, class_level)
     enforce_teacher_subject(user, subject)
@@ -238,6 +290,10 @@ def attendance_json(row):
         "class_level": row.class_level,
         "date": dt(row.date),
         "status": row.status,
+        "subject": getattr(row, "subject", "") or "Unknown/Legacy",
+        "left_early": bool(getattr(row, "left_early", False)),
+        "leave_time": dt(getattr(row, "leave_time", None)),
+        "leave_reason": getattr(row, "leave_reason", "") or "",
         "marked_by": user_json(row.marked_by),
         "created_at": dt(row.created_at),
         "updated_at": dt(getattr(row, "updated_at", None)),
@@ -586,8 +642,28 @@ def attendance(request):
             row.delete()
             log_attendance("delete", user, row, before=before)
             return ok({"message": "Attendance deleted"})
+        try:
+            status_value = attendance_status_value(data, row)
+            leave_fields = attendance_leave_fields(data, row)
+            subject = getattr(row, "subject", "") or ""
+            if "subject" in data:
+                subject = attendance_subject_for(user, row.class_level, data.get("subject"))
+        except (TypeError, ValueError) as exc:
+            return bad(str(exc))
         before = attendance_json(row)
-        row.update(status=data.get("status", row.status), marked_by=user, updated_at=datetime.utcnow())
+        try:
+            row.update(
+                status=status_value,
+                subject=subject,
+                left_early=leave_fields["left_early"],
+                leave_time=leave_fields["leave_time"],
+                leave_reason=leave_fields["leave_reason"],
+                marked_by=user,
+                updated_at=datetime.utcnow(),
+            )
+        except ValidationError as exc:
+            logger.warning("Invalid attendance update %s: %s", oid(row), exc, exc_info=True)
+            return bad("Attendance data is invalid.")
         updated = Attendance.objects(id=row.id).first()
         log_attendance("update", user, updated, before=before, after=attendance_json(updated))
         notify_student(
@@ -605,20 +681,34 @@ def attendance(request):
     if not student:
         return bad("Student not found", status.HTTP_404_NOT_FOUND)
     enforce_teacher_student(user, student)
-    date = parse_date(data.get("date"))
+    try:
+        date = attendance_date_value(data)
+        status_value = attendance_status_value(data)
+        subject = attendance_subject_for(user, student.class_level, data.get("subject"))
+        leave_fields = attendance_leave_fields(data)
+    except (TypeError, ValueError) as exc:
+        return bad(str(exc))
     row = Attendance.objects(student=student, date=date).first()
     if row and is_locked(row) and user.role != ROLE_ADMIN:
         return bad("Attendance record is locked", status.HTTP_403_FORBIDDEN)
     now = datetime.utcnow()
-    row = Attendance.objects(student=student, date=date).modify(
-        upsert=True,
-        new=True,
-        set__class_level=student.class_level,
-        set__status=data.get("status", "present"),
-        set__marked_by=user,
-        set__updated_at=now,
-        set_on_insert__created_at=now,
-    )
+    try:
+        row = Attendance.objects(student=student, date=date).modify(
+            upsert=True,
+            new=True,
+            set__class_level=student.class_level,
+            set__status=status_value,
+            set__subject=subject,
+            set__left_early=leave_fields["left_early"],
+            set__leave_time=leave_fields["leave_time"],
+            set__leave_reason=leave_fields["leave_reason"],
+            set__marked_by=user,
+            set__updated_at=now,
+            set_on_insert__created_at=now,
+        )
+    except ValidationError as exc:
+        logger.warning("Invalid attendance create for student %s: %s", oid(student), exc, exc_info=True)
+        return bad("Attendance data is invalid.")
     log_attendance("create", user, row, after=attendance_json(row))
     notify_student(
         row.student,
@@ -836,13 +926,37 @@ def notices(request):
         if request.method == "DELETE":
             row.delete()
             return ok({"message": "Notice deleted"})
-        class_level = str(data.get("class_level", row.class_level))
+        title = str(data.get("title", row.title) or "").strip()
+        body = str(data.get("body", row.body) or "").strip()
+        class_level = str(data.get("class_level", row.class_level) or "").strip()
+        if not title:
+            return bad("Notice title is required.")
+        if not body:
+            return bad("Notice body is required.")
+        if class_level not in CLASSES + ["all"]:
+            return bad("Select a valid class.")
         enforce_teacher_class(user, class_level)
-        row.update(title=data.get("title", row.title), body=data.get("body", row.body), class_level=class_level, updated_at=datetime.utcnow())
+        try:
+            row.update(title=title, body=body, class_level=class_level, updated_at=datetime.utcnow())
+        except ValidationError as exc:
+            logger.warning("Invalid notice update %s: %s", oid(row), exc, exc_info=True)
+            return bad("Notice data is invalid.")
         return ok({"notice": notice_json(Notice.objects(id=row.id).first())})
-    class_level = str(data.get("class_level", "all"))
+    title = str(data.get("title") or "").strip()
+    body = str(data.get("body") or "").strip()
+    class_level = str(data.get("class_level", "all") or "").strip()
+    if not title:
+        return bad("Notice title is required.")
+    if not body:
+        return bad("Notice body is required.")
+    if class_level not in CLASSES + ["all"]:
+        return bad("Select a valid class.")
     enforce_teacher_class(user, class_level)
-    row = Notice(title=data.get("title"), body=data.get("body"), class_level=class_level, created_by=user).save()
+    try:
+        row = Notice(title=title, body=body, class_level=class_level, created_by=user).save()
+    except ValidationError as exc:
+        logger.warning("Invalid notice create by %s: %s", oid(user), exc, exc_info=True)
+        return bad("Notice data is invalid.")
     notify_students_for_class(
         row.class_level,
         "notice",
@@ -874,8 +988,27 @@ def timetables(request):
         Timetable.objects(id=request.data.get("id") or request.GET.get("id")).delete()
         return ok({"message": "Timetable deleted"})
     data = request.data
-    periods = [TimetablePeriod(**period) for period in data.get("periods", [])]
-    row = Timetable.objects(class_level=str(data.get("class_level"))).modify(upsert=True, new=True, set__periods=periods, set__updated_at=datetime.utcnow())
+    class_level = str(data.get("class_level") or "").strip()
+    if class_level not in CLASSES:
+        return bad("Select a valid class.")
+    raw_periods = data.get("periods")
+    if not isinstance(raw_periods, list) or not raw_periods:
+        return bad("At least one timetable period is required.")
+    periods = []
+    for index, period in enumerate(raw_periods, start=1):
+        if not isinstance(period, dict):
+            return bad(f"Timetable period {index} is invalid.")
+        day = str(period.get("day") or "").strip()
+        time = str(period.get("time") or "").strip()
+        subject = str(period.get("subject") or "").strip()
+        if not day or not time or not subject:
+            return bad(f"Timetable period {index} requires day, time, and subject.")
+        periods.append(TimetablePeriod(day=day, time=time, subject=subject, teacher=str(period.get("teacher") or "").strip()))
+    try:
+        row = Timetable.objects(class_level=class_level).modify(upsert=True, new=True, set__periods=periods, set__updated_at=datetime.utcnow())
+    except ValidationError as exc:
+        logger.warning("Invalid timetable create/update for class %s: %s", class_level, exc, exc_info=True)
+        return bad("Timetable data is invalid.")
     notify_students_for_class(
         row.class_level,
         "timetable",
@@ -1076,6 +1209,7 @@ def fee_payments(request):
 @api_view(["GET", "POST", "PUT", "DELETE"])
 def blogs(request):
     user = current_user(request)
+    categories = Blog._fields["category"].choices
     if request.method == "GET":
         return ok({"results": [simple_json(row, ["title", "category", "content", "published", "created_at"]) for row in Blog.objects(published=True).order_by("-created_at")]})
     require_roles(request, [ROLE_ADMIN])
@@ -1087,9 +1221,35 @@ def blogs(request):
         if request.method == "DELETE":
             row.delete()
             return ok({"message": "Blog deleted"})
-        row.update(title=data.get("title", row.title), category=data.get("category", row.category), content=data.get("content", row.content), published=data.get("published", row.published))
+        title = str(data.get("title", row.title) or "").strip()
+        category = str(data.get("category", row.category) or "").strip()
+        content = str(data.get("content", row.content) or "").strip()
+        if not title:
+            return bad("Blog title is required.")
+        if category not in categories:
+            return bad("Select a valid blog category.")
+        if not content:
+            return bad("Blog content is required.")
+        try:
+            row.update(title=title, category=category, content=content, published=bool_value(data.get("published", row.published)))
+        except ValidationError as exc:
+            logger.warning("Invalid blog update %s: %s", oid(row), exc, exc_info=True)
+            return bad("Blog data is invalid.")
         return ok({"item": simple_json(Blog.objects(id=row.id).first(), ["title", "category", "content", "published", "created_at"])})
-    row = Blog(title=data.get("title"), category=data.get("category"), content=data.get("content"), published=data.get("published", True), author=user).save()
+    title = str(data.get("title") or "").strip()
+    category = str(data.get("category") or "").strip()
+    content = str(data.get("content") or "").strip()
+    if not title:
+        return bad("Blog title is required.")
+    if category not in categories:
+        return bad("Select a valid blog category.")
+    if not content:
+        return bad("Blog content is required.")
+    try:
+        row = Blog(title=title, category=category, content=content, published=bool_value(data.get("published", True)), author=user).save()
+    except ValidationError as exc:
+        logger.warning("Invalid blog create by %s: %s", oid(user), exc, exc_info=True)
+        return bad("Blog data is invalid.")
     if row.published:
         notify_all_students(
             "blog",
@@ -1119,26 +1279,46 @@ def current_affairs(request):
         if request.method == "DELETE":
             row.delete()
             return ok({"message": "Current affair deleted"})
-        row.update(
-            title=data.get("title", row.title),
-            summary=data.get("summary", row.summary),
-            content=data.get("content", row.content),
-            category=data.get("category", row.category),
-            source_url=data.get("source_url", row.source_url),
-            source_name=data.get("source_name", row.source_name),
-            image_url=data.get("image_url", row.image_url),
-        )
+        title = str(data.get("title", row.title) or "").strip()
+        summary = str(data.get("summary", row.summary) or "").strip()
+        if not title:
+            return bad("Current affair title is required.")
+        if not summary:
+            return bad("Current affair summary is required.")
+        try:
+            row.update(
+                title=title,
+                summary=summary,
+                content=data.get("content", row.content),
+                category=data.get("category", row.category),
+                source_url=data.get("source_url", row.source_url),
+                source_name=data.get("source_name", row.source_name),
+                image_url=data.get("image_url", row.image_url),
+            )
+        except ValidationError as exc:
+            logger.warning("Invalid current affair update %s: %s", oid(row), exc, exc_info=True)
+            return bad("Current affair data is invalid.")
         return ok({"item": simple_json(CurrentAffair.objects(id=row.id).first(), fields)})
-    row = CurrentAffair(
-        title=data.get("title"),
-        summary=data.get("summary"),
-        content=data.get("content", ""),
-        category=data.get("category", "Educational News"),
-        source_url=data.get("source_url", ""),
-        source_name=data.get("source_name", ""),
-        image_url=data.get("image_url", ""),
-        created_by=user,
-    ).save()
+    title = str(data.get("title") or "").strip()
+    summary = str(data.get("summary") or "").strip()
+    if not title:
+        return bad("Current affair title is required.")
+    if not summary:
+        return bad("Current affair summary is required.")
+    try:
+        row = CurrentAffair(
+            title=title,
+            summary=summary,
+            content=data.get("content", ""),
+            category=data.get("category", "Educational News"),
+            source_url=data.get("source_url", ""),
+            source_name=data.get("source_name", ""),
+            image_url=data.get("image_url", ""),
+            created_by=user,
+        ).save()
+    except ValidationError as exc:
+        logger.warning("Invalid current affair create by %s: %s", oid(user), exc, exc_info=True)
+        return bad("Current affair data is invalid.")
     notify_all_students(
         "current_affair",
         "Current Affairs",
@@ -2151,6 +2331,8 @@ def require_roles_for_user(user, roles):
 
 
 def parse_exam_datetime(value, field_label):
+    if value in [None, ""]:
+        raise ValueError(f"{field_label} is required.")
     try:
         return parse_date(value)
     except (TypeError, ValueError) as exc:
@@ -2160,8 +2342,6 @@ def parse_exam_datetime(value, field_label):
 def exam_fields(data, row=None):
     start_time = parse_exam_datetime(data.get("start_time", row.start_time if row else None), "Start time")
     end_time = parse_exam_datetime(data.get("end_time", row.end_time if row else None), "End time")
-    if not start_time or not end_time:
-        raise ValueError("Start time and end time are required.")
     if end_time <= start_time:
         raise ValueError("End time must be after start time.")
     try:
@@ -2175,10 +2355,19 @@ def exam_fields(data, row=None):
         passing_marks = float(data.get("passing_marks", row.passing_marks if row else 0) or 0)
     except (TypeError, ValueError) as exc:
         raise ValueError("Marks must be valid numbers.") from exc
+    name = str(data.get("name", row.name if row else "") or "").strip()
+    class_level = str(data.get("class_level", row.class_level if row else "") or "").strip()
+    subject = str(data.get("subject", row.subject if row else "") or "").strip()
+    if not name:
+        raise ValueError("Exam name is required.")
+    if class_level not in CLASSES:
+        raise ValueError("Select a valid class.")
+    if not subject:
+        raise ValueError("Exam subject is required.")
     return {
-        "name": data.get("name", row.name if row else ""),
-        "class_level": str(data.get("class_level", row.class_level if row else "")),
-        "subject": data.get("subject", row.subject if row else ""),
+        "name": name,
+        "class_level": class_level,
+        "subject": subject,
         "instructions": data.get("instructions", row.instructions if row else ""),
         "exam_date": parse_exam_datetime(data.get("exam_date", row.exam_date if row else start_time), "Exam date"),
         "start_time": start_time,
@@ -2408,7 +2597,11 @@ def exams(request):
         except (TypeError, ValueError) as exc:
             return bad(str(exc) or "Unable to save this exam.")
         was_published = row.is_published
-        row.update(**{f"set__{key}": value for key, value in payload.items()}, set__updated_at=datetime.utcnow())
+        try:
+            row.update(**{f"set__{key}": value for key, value in payload.items()}, set__updated_at=datetime.utcnow())
+        except ValidationError as exc:
+            logger.warning("Invalid exam update %s: %s", oid(row), exc, exc_info=True)
+            return bad("Exam data is invalid.")
         updated = Exam.objects(id=row.id).first()
         if not was_published and updated.is_published:
             notify_students_for_class(updated.class_level, "exam", "Exam Published", f"{updated.name} is now available.", "/operations", "red", "assignment", updated.id)
@@ -2418,7 +2611,11 @@ def exams(request):
         enforce_teacher_class(user, payload["class_level"])
     except (TypeError, ValueError) as exc:
         return bad(str(exc) or "Unable to create this exam.")
-    row = Exam(**payload, created_by=user).save()
+    try:
+        row = Exam(**payload, created_by=user).save()
+    except ValidationError as exc:
+        logger.warning("Invalid exam create by %s: %s", oid(user), exc, exc_info=True)
+        return bad("Exam data is invalid.")
     if row.is_published:
         notify_students_for_class(row.class_level, "exam", "Exam Published", f"{row.name} is now available.", "/operations", "red", "assignment", row.id)
     return ok({"exam": exam_json(row, user, include_questions=True, include_attempts=True)}, status.HTTP_201_CREATED)

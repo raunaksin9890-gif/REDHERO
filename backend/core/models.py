@@ -96,6 +96,9 @@ class Attendance(Document):
     class_level = StringField(required=True, choices=CLASSES)
     date = DateTimeField(required=True)
     status = StringField(required=True, choices=["present", "absent"])
+    # Legacy attendance documents may not contain a subject, so keep this optional
+    # at the schema level and enforce it on new API writes.
+    subject = StringField(default="")
     # Keep legacy attendance metadata readable without making it required for new records.
     leave_reason = StringField(default="")
     leave_time = DateTimeField()

@@ -89,7 +89,7 @@ class Command(BaseCommand):
                 TimetablePeriod(day="Wednesday", time="11:00 - 12:00", subject="English", teacher="Meera Joshi"),
             ],
         )
-        Attendance(student=student, class_level="10", date=datetime.utcnow(), status="present", marked_by=teacher_user).save()
+        Attendance(student=student, class_level="10", date=datetime.utcnow(), status="present", subject="Mathematics", marked_by=teacher_user).save()
         Marks(student=student, class_level="10", subject="Mathematics", exam_type="Unit Test", marks_obtained=42, max_marks=50, added_by=teacher_user).save()
 
         self.stdout.write(self.style.SUCCESS("RedHero seed data ready."))

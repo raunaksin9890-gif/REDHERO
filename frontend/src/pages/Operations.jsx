@@ -43,7 +43,7 @@ const MODULES = [
 const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
 export function Operations() {
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
   const [data, setData] = useState({ attendance: [], marks: [], assignments: [], exams: [], timetables: [], fees: [], feeSummary: {}, feeStudentRecords: [], paymentModes: [], students: [], audit: [] });
   const [active, setActive] = useState("hub");
   const [message, setMessage] = useState("");
@@ -109,7 +109,7 @@ export function Operations() {
       {active === "hub" ? (
         <OperationsHub data={data} user={user} onOpen={setActive} />
       ) : (
-        <OperationsDetail active={active} data={data} user={user} onSaved={load} setMessage={setMessage} />
+        <OperationsDetail active={active} data={data} user={user} profile={profile} onSaved={load} setMessage={setMessage} />
       )}
 
       <LoadingOverlay show={busy} label="Loading operations" />
@@ -191,8 +191,8 @@ function ModuleCard({ summary, onOpen }) {
   );
 }
 
-function OperationsDetail({ active, data, user, onSaved, setMessage }) {
-  if (active === "attendance") return <AttendanceDetail data={data} user={user} onSaved={onSaved} setMessage={setMessage} />;
+function OperationsDetail({ active, data, user, profile, onSaved, setMessage }) {
+  if (active === "attendance") return <AttendanceDetail data={data} user={user} subjects={profile?.subjects || []} onSaved={onSaved} setMessage={setMessage} />;
   if (active === "marks") return <MarksDetail data={data} user={user} onSaved={onSaved} setMessage={setMessage} />;
   if (active === "assignments") return <AssignmentsDetail data={data} user={user} onSaved={onSaved} setMessage={setMessage} />;
   if (active === "exams") return <ExamsDetail data={data} user={user} onSaved={onSaved} setMessage={setMessage} />;
@@ -200,13 +200,13 @@ function OperationsDetail({ active, data, user, onSaved, setMessage }) {
   return <FeesDetail data={data} user={user} onSaved={onSaved} setMessage={setMessage} />;
 }
 
-function AttendanceDetail({ data, user, onSaved, setMessage }) {
+function AttendanceDetail({ data, user, subjects, onSaved, setMessage }) {
   const summary = attendanceSummary(data.attendance);
   return (
     <div className="ops-detail-grid">
-      {user.role !== "student" && <AttendanceQuickMark attendance={data.attendance} students={data.students} onSaved={onSaved} setMessage={setMessage} />}
-      {user.role !== "student" && <AttendanceForm students={data.students} onSaved={onSaved} setMessage={setMessage} />}
-      <MetricDeck metrics={[["Overall Attendance", formatPercent(summary.percent)], ["Present", summary.present], ["Absent", summary.absent], ["Leave", "Not tracked"]]} />
+      {user.role !== "student" && <AttendanceQuickMark attendance={data.attendance} students={data.students} subjects={subjects} onSaved={onSaved} setMessage={setMessage} />}
+      {user.role !== "student" && <AttendanceForm students={data.students} subjects={subjects} onSaved={onSaved} setMessage={setMessage} />}
+      <MetricDeck metrics={[["Overall Attendance", formatPercent(summary.percent)], ["Present", summary.present], ["Absent", summary.absent], ["Leave", summary.leave]]} />
       <Panel title="Attendance Trend" icon={Activity} className="span-2">
         <LineChart values={monthlyAttendance(data.attendance).map((item) => item.percent)} />
       </Panel>
@@ -1025,10 +1025,12 @@ function MetricDeck({ metrics }) {
   );
 }
 
-function AttendanceQuickMark({ attendance = [], students = [], onSaved, setMessage }) {
+function AttendanceQuickMark({ attendance = [], students = [], subjects = [], onSaved, setMessage }) {
   const classes = useMemo(() => [...new Set(students.map((student) => student.class_level).filter(Boolean))].sort((a, b) => Number(a) - Number(b)), [students]);
+  const subjectOptions = useMemo(() => [...new Set(subjects.map((subject) => String(subject).trim()).filter(Boolean))], [subjects]);
   const [classLevel, setClassLevel] = useState(classes[0] || "");
   const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [subject, setSubject] = useState(subjectOptions.length === 1 ? subjectOptions[0] : "");
   const [absentIds, setAbsentIds] = useState([]);
   const [saving, setSaving] = useState(false);
   const toast = useToast();
@@ -1040,6 +1042,12 @@ function AttendanceQuickMark({ attendance = [], students = [], onSaved, setMessa
   useEffect(() => {
     if (!classLevel && classes.length) setClassLevel(classes[0]);
   }, [classLevel, classes]);
+
+  const subjectKey = subjectOptions.join("|");
+  useEffect(() => {
+    if (subjectOptions.length === 1) setSubject(subjectOptions[0]);
+    else if (subjectOptions.length > 1 && subject && !subjectOptions.includes(subject)) setSubject("");
+  }, [subjectKey, subject, subjectOptions]);
 
   useEffect(() => {
     const absent = attendance
@@ -1062,7 +1070,7 @@ function AttendanceQuickMark({ attendance = [], students = [], onSaved, setMessa
       setSaving(true);
       const response = await api("/attendance/bulk/", {
         method: "POST",
-        body: JSON.stringify({ class_level: classLevel, date, absent_student_ids: absentIds }),
+        body: JSON.stringify({ class_level: classLevel, date, subject, absent_student_ids: absentIds }),
       });
       setMessage(response.message || "Class attendance saved");
       toast?.show(`${response.present_count} present · ${response.absent_count} absent`);
@@ -1083,6 +1091,12 @@ function AttendanceQuickMark({ attendance = [], students = [], onSaved, setMessa
           {classes.map((item) => <option key={item} value={item}>Class {item}</option>)}
         </select>
         <input type="date" value={date} onChange={(event) => setDate(event.target.value)} />
+        {subjectOptions.length > 0 ? (
+          <select value={subject} onChange={(event) => setSubject(event.target.value)} required>
+            <option value="">Select subject</option>
+            {subjectOptions.map((item) => <option key={item} value={item}>{item}</option>)}
+          </select>
+        ) : <input placeholder="Subject" value={subject} onChange={(event) => setSubject(event.target.value)} required />}
         <button className="ops-soft-button" onClick={() => setAbsentIds([])} type="button"><CheckCircle2 size={16} /> All Present</button>
         <span>{classStudents.length - absentIds.length} present · {absentIds.length} absent</span>
       </div>
@@ -1109,9 +1123,15 @@ function AttendanceQuickMark({ attendance = [], students = [], onSaved, setMessa
   );
 }
 
-function AttendanceForm({ students, onSaved, setMessage }) {
-  const [form, setForm] = useState({ student: "", date: new Date().toISOString().slice(0, 10), status: "present" });
+function AttendanceForm({ students, subjects = [], onSaved, setMessage }) {
+  const subjectOptions = useMemo(() => [...new Set(subjects.map((subject) => String(subject).trim()).filter(Boolean))], [subjects]);
+  const [form, setForm] = useState({ student: "", date: new Date().toISOString().slice(0, 10), status: "present", subject: subjectOptions.length === 1 ? subjectOptions[0] : "", left_early: false, leave_time: "", leave_reason: "" });
   const toast = useToast();
+  const subjectKey = subjectOptions.join("|");
+  useEffect(() => {
+    if (subjectOptions.length === 1) setForm((current) => ({ ...current, subject: subjectOptions[0] }));
+    else if (subjectOptions.length > 1 && form.subject && !subjectOptions.includes(form.subject)) setForm((current) => ({ ...current, subject: "" }));
+  }, [subjectKey, form.subject, subjectOptions]);
   async function submit(event) {
     event.preventDefault();
     try {
@@ -1131,11 +1151,20 @@ function AttendanceForm({ students, onSaved, setMessage }) {
           <option value="">Select student</option>
           {students.map((student) => <option key={student.id} value={student.id}>{student.name} / Class {student.class_level}</option>)}
         </select>
+        {subjectOptions.length > 0 ? (
+          <select value={form.subject} onChange={(event) => setForm({ ...form, subject: event.target.value })} required>
+            <option value="">Select subject</option>
+            {subjectOptions.map((item) => <option key={item} value={item}>{item}</option>)}
+          </select>
+        ) : <input placeholder="Subject" value={form.subject} onChange={(event) => setForm({ ...form, subject: event.target.value })} required />}
         <input type="date" value={form.date} onChange={(event) => setForm({ ...form, date: event.target.value })} required />
         <select value={form.status} onChange={(event) => setForm({ ...form, status: event.target.value })}>
           <option value="present">Present</option>
           <option value="absent">Absent</option>
         </select>
+        <label className="ops-checkbox"><input type="checkbox" checked={form.left_early} onChange={(event) => setForm({ ...form, left_early: event.target.checked })} /> Early Leave</label>
+        <input type="datetime-local" value={form.leave_time} onChange={(event) => setForm({ ...form, leave_time: event.target.value })} />
+        <input placeholder="Leave reason" value={form.leave_reason} onChange={(event) => setForm({ ...form, leave_reason: event.target.value })} />
         <button className="ops-red-button"><Save size={16} /> Save</button>
       </form>
     </Panel>
@@ -1320,7 +1349,7 @@ function FeePaymentForm({ students = [], paymentModes = [], onSaved, setMessage 
 function AttendanceTable({ user, rows, onSaved, setMessage }) {
   return <EditableTable
     rows={rows}
-    columns={[["Date", (row) => formatDate(row.date)], ["Student", (row) => row.student?.name || "-"], ["Subject", () => "Not recorded"], ["Marked By", (row) => row.marked_by?.name || "-"], ["Status", (row) => <StatusBadge value={row.status} />]]}
+    columns={[["Date", (row) => formatDate(row.date)], ["Student", (row) => row.student?.name || "-"], ["Subject", (row) => row.subject || "Unknown/Legacy"], ["Early Leave", (row) => row.left_early ? "Yes" : "No"], ["Leave Time", (row) => formatDateTime(row.leave_time)], ["Leave Reason", (row) => row.leave_reason || "-"], ["Marked By", (row) => row.marked_by?.name || "-"], ["Status", (row) => <StatusBadge value={row.status} />]]}
     editFields={[["status", "select", ["present", "absent"]]]}
     canEdit={user.role !== "student"}
     canDelete={user.role === "super_admin"}
@@ -1753,7 +1782,7 @@ function useOpsSummaries(data, user) {
     const feeSummary = data.feeSummary || {};
     const feeTotal = Number(feeSummary.total_fees ?? data.fees.reduce((sum, row) => sum + Number(row.annual_fee || 0), 0));
     return {
-      attendance: { key: "attendance", title: "Attendance", subtitle: "Actual attendance records", value: formatPercent(att.percent), icon: ClipboardCheck, tone: "green", button: "View Attendance", metrics: [["Present", att.present], ["Absent", att.absent], ["Leave", "N/A"]].map(([label, value]) => ({ label, value })) },
+      attendance: { key: "attendance", title: "Attendance", subtitle: "Actual attendance records", value: formatPercent(att.percent), icon: ClipboardCheck, tone: "green", button: "View Attendance", metrics: [["Present", att.present], ["Absent", att.absent], ["Leave", att.leave]].map(([label, value]) => ({ label, value })) },
       marks: { key: "marks", title: "Marks & Results", subtitle: "Recorded assessments", value: formatPercent(markStats.average), icon: Trophy, tone: "violet", button: "View Marks", metrics: [["Highest", formatPercent(markStats.highest)], ["Lowest", formatPercent(markStats.lowest)], ["Records", data.marks.length]].map(([label, value]) => ({ label, value })) },
       assignments: { key: "assignments", title: "Assignments", subtitle: "Class assignment flow", value: data.assignments.length, icon: ListChecks, tone: "blue", button: "View Assignments", metrics: [["Pending", pending], ["Submitted", submitted], ["Completed", completed]].map(([label, value]) => ({ label, value })) },
       exams: { key: "exams", title: "Exams", subtitle: "Scheduled exam workflow", value: data.exams.length, icon: FileCheck2, tone: "red", button: "View Exams", metrics: [["Active", activeExams], ["Completed", completedExams], ["Results", data.exams.filter((item) => item.result_published).length]].map(([label, value]) => ({ label, value })) },
@@ -1767,7 +1796,8 @@ function attendanceSummary(items) {
   const present = items.filter((item) => item.status === "present").length;
   const absent = items.filter((item) => item.status === "absent").length;
   const total = present + absent;
-  return { present, absent, percent: total ? Math.round((present / total) * 100) : 0 };
+  const leave = items.filter((item) => [true, 1, "true", "1"].includes(item.left_early)).length;
+  return { present, absent, leave, percent: total ? Math.round((present / total) * 100) : 0 };
 }
 
 function marksSummary(items) {
@@ -1791,7 +1821,7 @@ function monthlyAttendance(items) {
 function subjectAttendance(items) {
   const map = new Map();
   items.forEach((item) => {
-    const subject = item.subject || "Not recorded";
+    const subject = item.subject || "Unknown/Legacy";
     const current = map.get(subject) || { present: 0, total: 0 };
     current.total += 1;
     if (item.status === "present") current.present += 1;
@@ -1977,7 +2007,7 @@ const operationsCenterStyles = `
 .ops-tools input { border: 0; background: transparent; padding-left: 0; }
 .ops-form { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)) auto; gap: 10px; }
 .ops-form textarea { grid-column: span 2; min-height: 42px; resize: vertical; }
-.quick-attendance-toolbar { display: grid; grid-template-columns: minmax(150px, 220px) minmax(150px, 200px) auto 1fr; align-items: center; gap: 9px; margin-bottom: 12px; }
+.quick-attendance-toolbar { display: grid; grid-template-columns: minmax(150px, 220px) minmax(150px, 200px) minmax(150px, 220px) auto 1fr; align-items: center; gap: 9px; margin-bottom: 12px; }
 .quick-attendance-toolbar select, .quick-attendance-toolbar input { min-height: 38px; padding: 8px 10px; color: #f8fafc; background: rgba(4,10,20,.72); border: 1px solid rgba(148,163,184,.18); border-radius: 6px; }
 .quick-attendance-toolbar > span { justify-self: end; color: #aeb6c4; font-size: 12px; font-weight: 900; }
 .quick-attendance-list { display: flex; flex-wrap: wrap; gap: 8px; min-height: 64px; padding: 12px; border: 1px solid rgba(148,163,184,.14); border-radius: 8px; background: rgba(4,10,20,.36); }
