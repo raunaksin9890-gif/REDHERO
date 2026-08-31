@@ -1,6 +1,7 @@
 import csv
 import io
 import logging
+import math
 import os
 from datetime import date, datetime, timedelta
 from uuid import uuid4
@@ -2353,8 +2354,16 @@ def exam_fields(data, row=None):
     try:
         total_marks = float(data.get("total_marks", row.total_marks if row else 0))
         passing_marks = float(data.get("passing_marks", row.passing_marks if row else 0) or 0)
+        negative_marking_penalty = float(
+            data.get("negative_marking_penalty", getattr(row, "negative_marking_penalty", 0)) or 0
+        )
     except (TypeError, ValueError) as exc:
         raise ValueError("Marks must be valid numbers.") from exc
+    if not math.isfinite(negative_marking_penalty) or negative_marking_penalty < 0:
+        raise ValueError("Negative marking penalty must be a finite non-negative number.")
+    negative_marking_enabled = bool_value(
+        data.get("negative_marking_enabled", getattr(row, "negative_marking_enabled", False))
+    )
     name = str(data.get("name", row.name if row else "") or "").strip()
     class_level = str(data.get("class_level", row.class_level if row else "") or "").strip()
     subject = str(data.get("subject", row.subject if row else "") or "").strip()
@@ -2375,6 +2384,8 @@ def exam_fields(data, row=None):
         "duration_minutes": duration,
         "total_marks": total_marks,
         "passing_marks": passing_marks,
+        "negative_marking_enabled": negative_marking_enabled,
+        "negative_marking_penalty": negative_marking_penalty if negative_marking_enabled else 0,
         "is_published": bool_value(data.get("is_published", row.is_published if row else False)),
     }
 
@@ -2455,6 +2466,16 @@ def answer_json(answer, include_marks=True):
 
 
 def attempt_json(attempt, include_answers=False, include_student=False, include_scores=True):
+    result = exam_attempt_result(attempt) if include_scores else {
+        "positive_marks": 0,
+        "negative_deduction": 0,
+        "final_marks": 0,
+        "percentage": 0,
+        "passed": False,
+        "correct_count": 0,
+        "wrong_count": 0,
+        "unanswered_count": 0,
+    }
     data = {
         "id": oid(attempt),
         "exam_id": oid(attempt.exam),
@@ -2465,6 +2486,7 @@ def attempt_json(attempt, include_answers=False, include_student=False, include_
         "objective_score": attempt.objective_score if include_scores else 0,
         "descriptive_score": attempt.descriptive_score if include_scores else 0,
         "score": attempt.score if include_scores else 0,
+        **result,
         "feedback": attempt.feedback if include_scores else "",
         "violation_count": attempt.violation_count,
         "max_violations": settings.EXAM_MAX_SCREEN_VIOLATIONS,
@@ -2497,6 +2519,8 @@ def exam_json(exam, user, include_questions=False, include_attempts=False):
         "duration_minutes": exam.duration_minutes,
         "total_marks": exam.total_marks,
         "passing_marks": exam.passing_marks,
+        "negative_marking_enabled": bool(getattr(exam, "negative_marking_enabled", False)),
+        "negative_marking_penalty": float(getattr(exam, "negative_marking_penalty", 0) or 0),
         "is_published": exam.is_published,
         "result_published": exam.result_published,
         "question_count": len(exam.questions),
@@ -2522,23 +2546,77 @@ def visible_exams_for_user(user):
     return Exam.objects
 
 
-def auto_grade_attempt(attempt):
-    exam = attempt.exam
-    objective = 0
-    by_id = {answer.question_id: answer for answer in attempt.answers}
+def grade_objective_answers(exam, answers):
+    by_id = {answer.question_id: answer for answer in answers}
     updated_answers = []
+    positive_marks = 0
+    negative_deduction = 0
+    correct_count = 0
+    wrong_count = 0
+    unanswered_count = 0
+    negative_marking_enabled = bool(getattr(exam, "negative_marking_enabled", False))
+    negative_marking_penalty = float(getattr(exam, "negative_marking_penalty", 0) or 0)
     for question in exam.questions:
         answer = by_id.get(question.question_id) or ExamAnswer(question_id=question.question_id)
+        normalized_answer = normalize_answer(answer.answer)
+        if not normalized_answer:
+            unanswered_count += 1
         if question.question_type in ["mcq", "true_false"]:
             answer.auto_graded = True
             answer.evaluated = True
-            answer.marks_awarded = question.marks if normalize_answer(answer.answer) == normalize_answer(objective_correct_answer(question)) else 0
-            objective += answer.marks_awarded
+            if not normalized_answer:
+                answer.marks_awarded = 0
+            elif normalized_answer == normalize_answer(objective_correct_answer(question)):
+                answer.marks_awarded = question.marks
+                positive_marks += question.marks
+                correct_count += 1
+            else:
+                answer.marks_awarded = -negative_marking_penalty if negative_marking_enabled else 0
+                negative_deduction += negative_marking_penalty if negative_marking_enabled else 0
+                wrong_count += 1
         updated_answers.append(answer)
+    return {
+        "answers": updated_answers,
+        "positive_marks": positive_marks,
+        "negative_deduction": negative_deduction,
+        "objective_score": positive_marks - negative_deduction,
+        "correct_count": correct_count,
+        "wrong_count": wrong_count,
+        "unanswered_count": unanswered_count,
+    }
+
+
+def exam_attempt_result(attempt):
+    grade = grade_objective_answers(attempt.exam, attempt.answers)
+    descriptive_score = float(getattr(attempt, "descriptive_score", 0) or 0)
+    final_marks = max(0, grade["objective_score"] + descriptive_score)
+    total_marks = float(getattr(attempt.exam, "total_marks", 0) or 0)
+    passing_marks = float(getattr(attempt.exam, "passing_marks", 0) or 0)
+    return {
+        "positive_marks": grade["positive_marks"],
+        "negative_deduction": grade["negative_deduction"],
+        "final_marks": final_marks,
+        "percentage": round((final_marks / total_marks) * 100, 2) if total_marks else 0,
+        "passed": final_marks >= passing_marks,
+        "correct_count": grade["correct_count"],
+        "wrong_count": grade["wrong_count"],
+        "unanswered_count": grade["unanswered_count"],
+    }
+
+
+def auto_grade_attempt(attempt):
+    exam = attempt.exam
+    grade = grade_objective_answers(exam, attempt.answers)
+    descriptive_score = float(getattr(attempt, "descriptive_score", 0) or 0)
     attempt.update(
-        answers=updated_answers,
-        objective_score=objective,
-        score=objective + attempt.descriptive_score,
+        answers=grade["answers"],
+        objective_score=grade["objective_score"],
+        positive_marks=grade["positive_marks"],
+        negative_deduction=grade["negative_deduction"],
+        correct_count=grade["correct_count"],
+        wrong_count=grade["wrong_count"],
+        unanswered_count=grade["unanswered_count"],
+        score=max(0, grade["objective_score"] + descriptive_score),
         updated_at=datetime.utcnow(),
     )
     return ExamAttempt.objects(id=attempt.id).first()
@@ -2821,6 +2899,8 @@ def exam_duplicate(request, exam_id):
         duration_minutes=exam.duration_minutes,
         total_marks=exam.total_marks,
         passing_marks=exam.passing_marks,
+        negative_marking_enabled=getattr(exam, "negative_marking_enabled", False),
+        negative_marking_penalty=getattr(exam, "negative_marking_penalty", 0),
         is_published=False,
         result_published=False,
         questions=questions,
@@ -2924,13 +3004,12 @@ def exam_attempt_evaluate(request, attempt_id):
     evaluations = {item.get("question_id"): item for item in request.data.get("evaluations", [])}
     answers = []
     descriptive = 0
-    objective = 0
     questions = {question.question_id: question for question in attempt.exam.questions}
     existing = {answer.question_id: answer for answer in attempt.answers}
     for qid, question in questions.items():
         answer = existing.get(qid) or ExamAnswer(question_id=qid)
         if question.question_type in ["mcq", "true_false"]:
-            objective += answer.marks_awarded
+            pass
         else:
             evaluation = evaluations.get(qid, {})
             marks_value = min(float(evaluation.get("marks_awarded", answer.marks_awarded) or 0), question.marks)
@@ -2939,11 +3018,17 @@ def exam_attempt_evaluate(request, attempt_id):
             answer.evaluated = True
             descriptive += answer.marks_awarded
         answers.append(answer)
+    grade = grade_objective_answers(attempt.exam, answers)
     attempt.update(
-        answers=answers,
-        objective_score=objective,
+        answers=grade["answers"],
+        objective_score=grade["objective_score"],
         descriptive_score=descriptive,
-        score=objective + descriptive,
+        positive_marks=grade["positive_marks"],
+        negative_deduction=grade["negative_deduction"],
+        correct_count=grade["correct_count"],
+        wrong_count=grade["wrong_count"],
+        unanswered_count=grade["unanswered_count"],
+        score=max(0, grade["objective_score"] + descriptive),
         status="evaluated",
         feedback=request.data.get("feedback", attempt.feedback),
         evaluated_by=user,

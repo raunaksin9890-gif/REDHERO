@@ -333,6 +333,8 @@ function ExamForm({ students = [], onSaved, setMessage }) {
     duration_minutes: "60",
     total_marks: "0",
     passing_marks: "0",
+    negative_marking_enabled: false,
+    negative_marking_penalty: "0",
     is_published: false,
   });
   const toast = useToast();
@@ -354,6 +356,8 @@ function ExamForm({ students = [], onSaved, setMessage }) {
     if (!form.start_time || !form.end_time) return "Start and end date/time are required.";
     if (new Date(form.end_time) <= new Date(form.start_time)) return "End date/time must be after start date/time.";
     if (!Number.isFinite(duration) || duration <= 0) return "Duration must be positive.";
+    const penalty = Number(form.negative_marking_penalty);
+    if (!Number.isFinite(penalty) || penalty < 0) return "Negative marking penalty cannot be negative.";
     return "";
   }
   async function submit(event) {
@@ -397,7 +401,11 @@ function ExamForm({ students = [], onSaved, setMessage }) {
           <option value="false">Draft</option>
           <option value="true">Scheduled / Published</option>
         </select></label>
-        <label>Negative Marking<input value="Not configured" readOnly /></label>
+        <label>Negative Marking<select value={form.negative_marking_enabled ? "true" : "false"} onChange={(event) => patchForm({ negative_marking_enabled: event.target.value === "true" })}>
+          <option value="false">Off</option>
+          <option value="true">On</option>
+        </select></label>
+        <label>Penalty per Wrong Answer<input inputMode="decimal" value={form.negative_marking_penalty} onChange={(event) => patchForm({ negative_marking_penalty: event.target.value })} disabled={!form.negative_marking_enabled} /></label>
         <label className="span-field">Instructions<textarea value={form.instructions} onChange={(event) => patchForm({ instructions: event.target.value })} /></label>
         <button className="ops-red-button"><Plus size={16} /> Create Exam</button>
       </form>
@@ -415,7 +423,7 @@ function ExamManager({ tab, exams, selected, setSelectedId, onSaved, setMessage 
       <EditableTable
         rows={exams}
         columns={[["Exam", (row) => row.name], ["Class", (row) => `Class ${row.class_level}`], ["Subject", (row) => row.subject], ["Window", (row) => `${formatDateTime(row.start_time)} - ${formatDateTime(row.end_time)}`], ["Status", (row) => <StatusBadge value={row.is_published ? "Published" : "Draft"} />], ["Results", (row) => <StatusBadge value={row.result_published ? "Published" : "Draft"} />]]}
-        editFields={[["name"], ["class_level"], ["subject"], ["start_time", "datetime-local"], ["end_time", "datetime-local"], ["duration_minutes"], ["passing_marks"]]}
+        editFields={[["name"], ["class_level"], ["subject"], ["start_time", "datetime-local"], ["end_time", "datetime-local"], ["duration_minutes"], ["passing_marks"], ["negative_marking_enabled", "select", ["false", "true"]], ["negative_marking_penalty"]]}
         canEdit
         canDelete
         onSave={(row, draft) => api("/exams/", { method: "PUT", body: JSON.stringify({ ...row, ...draft, id: row.id }) })}
@@ -686,7 +694,7 @@ function ExamSubmissions({ exam, exams, setSelectedId, onSaved, setMessage }) {
   return (
     <>
       <div className="ops-tools"><Search size={16} /><select value={exam.id} onChange={(event) => setSelectedId(event.target.value)}>{exams.map((item) => <option key={item.id} value={item.id}>{item.name} / Class {item.class_level}</option>)}</select></div>
-      <CompactTable columns={["Student ID", "Student", "Started", "Submitted", "Score", "Status", "Submission Type"]} rows={(exam.attempts || []).map((item) => [item.student?.student_id || "-", item.student?.name || "-", formatDateTime(item.started_at), formatDateTime(item.submitted_at), `${item.score || 0}/${exam.total_marks}`, item.status, submissionType(item)])} />
+      <CompactTable columns={["Student ID", "Student", "Started", "Submitted", "Score", "Status", "Submission Type"]} rows={(exam.attempts || []).map((item) => [item.student?.student_id || "-", item.student?.name || "-", formatDateTime(item.started_at), formatDateTime(item.submitted_at), `${item.final_marks ?? item.score ?? 0}/${exam.total_marks}`, item.status, submissionType(item)])} />
       {(exam.attempts || []).length > 0 && (
         <div className="ops-tools"><Search size={16} /><select value={attempt?.id || ""} onChange={(event) => setSelectedAttemptId(event.target.value)}>{(exam.attempts || []).map((item) => <option key={item.id} value={item.id}>{item.student?.name || "Student"} / {item.status}</option>)}</select></div>
       )}
@@ -715,6 +723,7 @@ function EvaluationPanel({ exam, attempt, onSaved, setMessage }) {
         <strong>Exam screen activity</strong>
         <span>Violations: {attempt.violation_count || 0}/{attempt.max_violations || 1}</span>
         <small>Auto submitted: {attempt.auto_submitted ? "Yes" : "No"}{attempt.auto_submit_reason ? ` / Reason: ${attempt.auto_submit_reason}` : ""}</small>
+        <small>Positive: {attempt.positive_marks ?? 0} / Deduction: {attempt.negative_deduction ?? 0} / Final: {attempt.final_marks ?? attempt.score ?? 0} / {attempt.percentage ?? 0}% / {attempt.passed ? "Pass" : "Fail"} / Correct: {attempt.correct_count ?? 0} / Wrong: {attempt.wrong_count ?? 0} / Unanswered: {attempt.unanswered_count ?? 0}</small>
       </article>
       {(exam.questions || []).map((question) => {
         const answer = answers[question.question_id] || {};
@@ -771,7 +780,7 @@ function StudentExamCard({ exam, onSaved, setMessage }) {
         <div>
           <strong>{exam.name}</strong>
           <span>{exam.subject} / {exam.question_count || 0} questions / {exam.total_marks} marks / {exam.duration_minutes} min</span>
-          <small>Passing Marks: {exam.passing_marks || 0}. Negative Marking: Not configured.</small>
+          <small>Passing Marks: {exam.passing_marks || 0}. Negative Marking: {exam.negative_marking_enabled ? `On (-${exam.negative_marking_penalty || 0} per wrong answer)` : "Off"}.</small>
           <small>{exam.instructions || "Read all questions carefully before submitting."}</small>
           <small>During the exam, leaving the exam tab or exiting fullscreen may automatically submit your exam.</small>
         </div>
@@ -790,7 +799,7 @@ function StudentExamCard({ exam, onSaved, setMessage }) {
         <strong>{exam.name}</strong>
         <span>{exam.subject} / {formatDateTime(exam.start_time)} / {exam.duration_minutes} min / {exam.total_marks} marks</span>
         <small>{exam.instructions || "Read all questions carefully before submitting."}</small>
-        {resultVisible && <small>Result: {attempt.score || 0}/{exam.total_marks} / {Number(attempt.score || 0) >= Number(exam.passing_marks || 0) ? "Pass" : "Fail"}</small>}
+        {resultVisible && <small>Result: {attempt.final_marks ?? attempt.score ?? 0}/{exam.total_marks} / {attempt.passed ? "Pass" : "Fail"} / Positive: {attempt.positive_marks ?? 0} / Deduction: {attempt.negative_deduction ?? 0} / Correct: {attempt.correct_count ?? 0} / Wrong: {attempt.wrong_count ?? 0} / Unanswered: {attempt.unanswered_count ?? 0}</small>}
       </div>
       <StatusBadge value={resultVisible ? "Result Published" : formatExamStatus(exam.status)} />
       {exam.status === "active" && !attempt?.submitted_at && <button className="ops-red-button" onClick={() => setStartPreview(true)}>Start Exam</button>}
@@ -1527,7 +1536,7 @@ function EditableTable({ rows, columns, editFields, canEdit, canDelete, onSave, 
                         </>
                       ) : (
                         <>
-                          {canEdit && <button className="ops-icon" title="Edit" onClick={() => { setEditing(row.id); setDraft(Object.fromEntries(editFields.map(([field, type]) => [field, type === "datetime-local" ? toDateTimeLocal(row[field]) : row[field] ?? ""]))); }}><Pencil size={15} /></button>}
+                          {canEdit && <button className="ops-icon" title="Edit" onClick={() => { setEditing(row.id); setDraft(Object.fromEntries(editFields.map(([field, type]) => [field, type === "datetime-local" ? toDateTimeLocal(row[field]) : type === "select" ? String(row[field] ?? "") : row[field] ?? ""]))); }}><Pencil size={15} /></button>}
                           {canDelete && <button className="ops-icon danger" title="Delete" onClick={() => setConfirm(row)}><Trash2 size={15} /></button>}
                           {extraActions?.(row)}
                         </>
