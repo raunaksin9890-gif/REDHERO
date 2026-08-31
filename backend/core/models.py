@@ -96,6 +96,10 @@ class Attendance(Document):
     class_level = StringField(required=True, choices=CLASSES)
     date = DateTimeField(required=True)
     status = StringField(required=True, choices=["present", "absent"])
+    # Keep legacy attendance metadata readable without making it required for new records.
+    leave_reason = StringField(default="")
+    leave_time = DateTimeField()
+    left_early = BooleanField(default=False)
     marked_by = ReferenceField(User, required=True)
     created_at = DateTimeField(default=datetime.utcnow)
     updated_at = DateTimeField(default=datetime.utcnow)

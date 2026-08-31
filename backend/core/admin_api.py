@@ -1,5 +1,6 @@
 import csv
 import io
+import logging
 import os
 from datetime import date, datetime, timedelta
 from uuid import uuid4
@@ -52,6 +53,8 @@ from .current_affairs import maybe_auto_update_current_affairs
 from .notifications import notify_all_students, notify_student, notify_students_for_class
 from .security import current_user, hash_password, require_roles
 from .services import next_code, parse_date, schedule_now, schedule_time, store_schedule_time
+
+logger = logging.getLogger(__name__)
 
 
 def ok(data=None, http_status=status.HTTP_200_OK):
@@ -240,6 +243,19 @@ def attendance_json(row):
         "updated_at": dt(getattr(row, "updated_at", None)),
         "locked": is_locked(row),
     }
+
+
+def safe_attendance_json(row):
+    try:
+        return attendance_json(row)
+    except Exception as exc:
+        logger.warning(
+            "Skipping invalid attendance record %s during Operations serialization: %s",
+            getattr(row, "id", "unknown"),
+            exc,
+            exc_info=True,
+        )
+        return None
 
 
 def marks_json(row):
@@ -549,7 +565,12 @@ def attendance(request):
             rows = Attendance.objects(class_level__in=teacher_classes(user)).order_by("-date")
         else:
             rows = Attendance.objects.order_by("-date")
-        return ok({"results": [attendance_json(row) for row in rows]})
+        results = []
+        for row in rows:
+            serialized = safe_attendance_json(row)
+            if serialized is not None:
+                results.append(serialized)
+        return ok({"results": results})
     require_roles(request, [ROLE_ADMIN, ROLE_TEACHER])
     data = request.data
     if request.method in ["PUT", "DELETE"]:
