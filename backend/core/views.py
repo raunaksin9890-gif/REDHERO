@@ -15,7 +15,7 @@ from django.conf import settings
 from django.core.files.storage import default_storage
 from django.http import HttpResponse
 from django.utils.text import get_valid_filename
-from mongoengine.errors import NotUniqueError, ValidationError
+from mongoengine.errors import DoesNotExist, NotUniqueError, ValidationError
 from mongoengine.queryset.visitor import Q
 from rest_framework.decorators import api_view
 from rest_framework.exceptions import ParseError, PermissionDenied
@@ -67,6 +67,7 @@ from .serializers import (
     user_json,
 )
 from .services import next_code, parse_date
+from .pdf_reports import build_attendance_pdf
 
 
 logger = logging.getLogger(__name__)
@@ -1129,6 +1130,126 @@ def attendance(request):
         row.id,
     )
     return ok({"message": "Attendance marked", "attendance": attendance_json(row)}, status.HTTP_201_CREATED)
+
+
+def attendance_report_boundary(value, label):
+    if not value:
+        return None
+    try:
+        parsed = parse_date(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label} must be a valid date.") from exc
+    return parsed.replace(hour=0, minute=0, second=0, microsecond=0)
+
+
+def attendance_export_row(row):
+    try:
+        student = row.student
+    except DoesNotExist:
+        logger.warning("Skipping attendance %s from PDF: student reference is missing", getattr(row, "id", "unknown"))
+        return None
+    if not student:
+        logger.warning("Skipping attendance %s from PDF: student is missing", getattr(row, "id", "unknown"))
+        return None
+    try:
+        marked_by = row.marked_by
+    except DoesNotExist:
+        logger.warning("Attendance %s has a missing marked_by reference", getattr(row, "id", "unknown"))
+        marked_by = None
+    return {
+        "date": getattr(row, "date", None),
+        "class_level": getattr(row, "class_level", ""),
+        "student_name": getattr(student, "name", "-"),
+        "student_id": getattr(student, "student_id", ""),
+        "roll_number": getattr(student, "roll_number", ""),
+        "subject": getattr(row, "subject", "") or "Unknown/Legacy",
+        "status": getattr(row, "status", ""),
+        "left_early": bool(getattr(row, "left_early", False)),
+        "leave_time": getattr(row, "leave_time", None),
+        "leave_reason": getattr(row, "leave_reason", "") or "",
+        "marked_by": getattr(marked_by, "name", "Unknown") if marked_by else "Unknown",
+    }
+
+
+@api_view(["GET"])
+def attendance_pdf(request):
+    user = require_roles(request, [ROLE_ADMIN, ROLE_TEACHER])
+    class_level = str(request.GET.get("class_level", "") or "").strip()
+    subject = str(request.GET.get("subject", "") or "").strip()
+    if class_level and class_level not in CLASSES:
+        return bad("Class is invalid.")
+    if user.role == ROLE_TEACHER:
+        enforce_teacher_class(user, class_level) if class_level else None
+        from .admin_api import enforce_teacher_subject, teacher_subjects
+
+        assigned_subjects = [str(item).strip() for item in teacher_subjects(user) if str(item).strip()]
+        if subject:
+            enforce_teacher_subject(user, subject)
+            subject = next((item for item in assigned_subjects if item.lower() == subject.lower()), subject)
+        elif not assigned_subjects:
+            raise PermissionDenied("Teacher has no assigned subjects")
+    date_value = request.GET.get("date")
+    date_from = request.GET.get("date_from")
+    date_to = request.GET.get("date_to")
+    month = str(request.GET.get("month", "") or "").strip()
+    if date_value and (date_from or date_to or month):
+        return bad("Use either date, date range, or month, not more than one.")
+    try:
+        if month:
+            start = datetime.strptime(month, "%Y-%m")
+            end = start.replace(year=start.year + (1 if start.month == 12 else 0), month=1 if start.month == 12 else start.month + 1)
+        elif date_value:
+            start = attendance_report_boundary(date_value, "Date")
+            end = start + timedelta(days=1)
+        else:
+            start = attendance_report_boundary(date_from, "Start date")
+            end = attendance_report_boundary(date_to, "End date")
+            if start and end and end < start:
+                return bad("End date must be on or after start date.")
+            if end:
+                end += timedelta(days=1)
+    except (TypeError, ValueError):
+        return bad("Attendance date filters must be valid.")
+
+    query = Attendance.objects
+    if class_level:
+        query = query(class_level=class_level)
+    elif user.role == ROLE_TEACHER:
+        query = query(class_level__in=teacher_assigned_classes(user))
+    if subject:
+        query = query(subject=subject)
+    elif user.role == ROLE_TEACHER:
+        query = query.filter(Q(subject__in=assigned_subjects) | Q(subject="") | Q(subject__exists=False))
+    if start:
+        query = query(date__gte=start)
+    if end:
+        query = query(date__lt=end)
+
+    export_rows = []
+    for row in query.order_by("-date"):
+        normalized = attendance_export_row(row)
+        if normalized:
+            export_rows.append(normalized)
+    if date_value:
+        date_label = str(date_value)
+    elif month:
+        date_label = month
+    elif date_from or date_to:
+        date_label = f"{date_from or 'Beginning'} to {date_to or 'Present'}"
+    else:
+        date_label = "All dates"
+    pdf = build_attendance_pdf(
+        export_rows,
+        {
+            "class_level": class_level,
+            "subject": subject,
+            "date_label": date_label,
+            "teacher": getattr(user, "name", ""),
+        },
+    )
+    response = HttpResponse(pdf, content_type="application/pdf")
+    response["Content-Disposition"] = 'attachment; filename="redhero-attendance-report.pdf"'
+    return response
 
 
 @api_view(["POST"])

@@ -8,7 +8,7 @@ from uuid import uuid4
 
 from django.conf import settings
 from django.http import HttpResponse
-from mongoengine.errors import NotUniqueError, ValidationError
+from mongoengine.errors import DoesNotExist, NotUniqueError, ValidationError
 from openpyxl import load_workbook
 from rest_framework import status
 from rest_framework.decorators import api_view
@@ -54,6 +54,7 @@ from .current_affairs import maybe_auto_update_current_affairs
 from .notifications import notify_all_students, notify_student, notify_students_for_class
 from .security import current_user, hash_password, require_roles
 from .services import next_code, parse_date, schedule_now, schedule_time, store_schedule_time
+from .pdf_reports import build_exam_result_pdf
 
 logger = logging.getLogger(__name__)
 
@@ -2691,6 +2692,89 @@ def exam_attempt_result(attempt):
         "wrong_count": grade["wrong_count"],
         "unanswered_count": grade["unanswered_count"],
     }
+
+
+def exam_result_pdf_questions(exam, attempt):
+    answers = {answer.question_id: answer for answer in attempt.answers}
+    negative_marking_enabled = bool(getattr(exam, "negative_marking_enabled", False))
+    penalty = float(getattr(exam, "negative_marking_penalty", 0) or 0)
+    questions = []
+    for question in sorted(exam.questions, key=lambda item: item.order):
+        answer = answers.get(question.question_id)
+        student_answer = getattr(answer, "answer", "") if answer else ""
+        normalized_answer = normalize_answer(student_answer)
+        if not normalized_answer:
+            status_value = "Unanswered"
+            marks_awarded = 0
+            negative_deduction = 0
+        elif question.question_type in ["mcq", "true_false"]:
+            correct = normalized_answer == normalize_answer(objective_correct_answer(question))
+            status_value = "Correct" if correct else "Wrong"
+            marks_awarded = question.marks if correct else (-penalty if negative_marking_enabled else 0)
+            negative_deduction = penalty if (not correct and negative_marking_enabled) else 0
+        else:
+            marks_awarded = float(getattr(answer, "marks_awarded", 0) or 0) if answer else 0
+            status_value = "Correct" if marks_awarded > 0 else "Wrong"
+            negative_deduction = 0
+        questions.append(
+            {
+                "question": question.text,
+                "student_answer": student_answer,
+                "correct_answer": objective_correct_answer(question) if question.question_type in ["mcq", "true_false"] else question.expected_answer,
+                "status": status_value,
+                "marks_awarded": marks_awarded,
+                "negative_deduction": negative_deduction,
+                "explanation": question.explanation,
+            }
+        )
+    return questions
+
+
+@api_view(["GET"])
+def exam_attempt_result_pdf(request, attempt_id):
+    user = require_roles(request, [ROLE_ADMIN, ROLE_TEACHER, ROLE_STUDENT])
+    try:
+        attempt = ExamAttempt.objects(id=attempt_id).first()
+        if not attempt:
+            return bad("Result not found", status.HTTP_404_NOT_FOUND)
+        exam = attempt.exam
+        student = attempt.student
+    except (DoesNotExist, ValidationError):
+        logger.warning("Unable to resolve exam result references for attempt %s", attempt_id, exc_info=True)
+        return bad("Result not found", status.HTTP_404_NOT_FOUND)
+    if not exam or not student:
+        return bad("Result not found", status.HTTP_404_NOT_FOUND)
+    if user.role == ROLE_STUDENT:
+        owner = get_student_for_user(user)
+        if not owner or str(owner.id) != str(student.id):
+            return bad("Result not found", status.HTTP_404_NOT_FOUND)
+        if not exam.result_published:
+            return bad("This result has not been published yet.", status.HTTP_403_FORBIDDEN)
+    else:
+        enforce_exam_manager(user, exam)
+        enforce_teacher_subject(user, exam.subject)
+    if attempt.status == "in_progress":
+        return bad("This exam attempt has not been submitted.", status.HTTP_403_FORBIDDEN)
+
+    result = exam_attempt_result(attempt)
+    result["marks_obtained"] = result["final_marks"]
+    student_data = {
+        "name": student.name,
+        "student_id": student.student_id,
+        "roll_number": student.roll_number,
+    }
+    exam_data = {
+        "name": exam.name,
+        "class_level": exam.class_level,
+        "subject": exam.subject,
+        "exam_date": exam.exam_date.strftime("%d %b %Y") if exam.exam_date else "-",
+        "total_marks": exam.total_marks,
+        "passing_marks": exam.passing_marks,
+    }
+    pdf = build_exam_result_pdf(student_data, exam_data, result, exam_result_pdf_questions(exam, attempt))
+    response = HttpResponse(pdf, content_type="application/pdf")
+    response["Content-Disposition"] = 'attachment; filename="redhero-exam-result.pdf"'
+    return response
 
 
 def auto_grade_attempt(attempt):

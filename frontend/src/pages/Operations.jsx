@@ -27,7 +27,7 @@ import {
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { api } from "../api/client.js";
+import { API_URL, api, getToken } from "../api/client.js";
 import { useAuth } from "../components/AuthProvider.jsx";
 import { AnimatedValue, ConfirmDialog, EmptyState, LoadingOverlay, useToast } from "../components/UX.jsx";
 
@@ -202,6 +202,14 @@ function OperationsDetail({ active, data, user, profile, onSaved, setMessage }) 
 
 function AttendanceDetail({ data, user, subjects, onSaved, setMessage }) {
   const summary = attendanceSummary(data.attendance);
+  async function downloadAttendancePdf() {
+    try {
+      await downloadPdf("/attendance/pdf/", "redhero-attendance-report.pdf");
+      setMessage("Attendance PDF downloaded");
+    } catch (err) {
+      setMessage(err.message);
+    }
+  }
   return (
     <div className="ops-detail-grid">
       {user.role !== "student" && <AttendanceQuickMark attendance={data.attendance} students={data.students} subjects={subjects} onSaved={onSaved} setMessage={setMessage} />}
@@ -214,7 +222,7 @@ function AttendanceDetail({ data, user, subjects, onSaved, setMessage }) {
         <DonutChart percent={summary.percent} />
         <SubjectBreakdown rows={subjectAttendance(data.attendance)} />
       </Panel>
-      <Panel title="Attendance History" icon={ClipboardCheck} className="span-3">
+      <Panel title="Attendance History" icon={ClipboardCheck} className="span-3" action={user.role !== "student" && <button className="ops-soft-button" type="button" onClick={downloadAttendancePdf}><Download size={16} /> Download Attendance PDF</button>}>
         <AttendanceTable user={user} rows={data.attendance} onSaved={onSaved} setMessage={setMessage} />
       </Panel>
       {user.role === "super_admin" && <AuditPanel items={data.audit} />}
@@ -691,6 +699,14 @@ function QuestionBuilder({ exam, exams, setSelectedId, onSaved, setMessage }) {
 function ExamSubmissions({ exam, exams, setSelectedId, onSaved, setMessage }) {
   const [selectedAttemptId, setSelectedAttemptId] = useState("");
   const attempt = (exam.attempts || []).find((item) => item.id === selectedAttemptId) || (exam.attempts || [])[0];
+  async function downloadResultPdf() {
+    try {
+      await downloadPdf(`/exam-attempts/${attempt.id}/result-pdf/`, "redhero-exam-result.pdf");
+      setMessage("Result PDF downloaded");
+    } catch (err) {
+      setMessage(err.message);
+    }
+  }
   return (
     <>
       <div className="ops-tools"><Search size={16} /><select value={exam.id} onChange={(event) => setSelectedId(event.target.value)}>{exams.map((item) => <option key={item.id} value={item.id}>{item.name} / Class {item.class_level}</option>)}</select></div>
@@ -698,6 +714,7 @@ function ExamSubmissions({ exam, exams, setSelectedId, onSaved, setMessage }) {
       {(exam.attempts || []).length > 0 && (
         <div className="ops-tools"><Search size={16} /><select value={attempt?.id || ""} onChange={(event) => setSelectedAttemptId(event.target.value)}>{(exam.attempts || []).map((item) => <option key={item.id} value={item.id}>{item.student?.name || "Student"} / {item.status}</option>)}</select></div>
       )}
+      {attempt && attempt.status !== "in_progress" && <div className="ops-actions"><button className="ops-soft-button" type="button" onClick={downloadResultPdf}><Download size={16} /> Download Result PDF</button></div>}
       {attempt ? <EvaluationPanel exam={exam} attempt={attempt} onSaved={onSaved} setMessage={setMessage} /> : <EmptyState title="No submissions yet" />}
     </>
   );
@@ -773,6 +790,14 @@ function StudentExamCard({ exam, onSaved, setMessage }) {
   }
   if (taking && attempt) return <ExamTakingPanel exam={activeExam} attempt={attempt} setAttempt={setAttempt} setMessage={setMessage} onSaved={onSaved} />;
   const resultVisible = exam.result_published && attempt;
+  async function downloadResultPdf() {
+    try {
+      await downloadPdf(`/exam-attempts/${attempt.id}/result-pdf/`, "redhero-exam-result.pdf");
+      setMessage("Result PDF downloaded");
+    } catch (err) {
+      setMessage(err.message);
+    }
+  }
   if (startPreview) {
     return (
       <article className="exam-start-card">
@@ -806,6 +831,7 @@ function StudentExamCard({ exam, onSaved, setMessage }) {
       {exam.status === "upcoming" && <button className="ops-soft-button" type="button">Exam starts at {formatDateTime(exam.start_time)}</button>}
       {exam.status === "ended" && !attempt?.submitted_at && <button className="ops-soft-button" type="button">Exam Ended</button>}
       {attempt?.submitted_at && <button className="ops-soft-button" type="button">Submitted</button>}
+      {resultVisible && attempt.status !== "in_progress" && <button className="ops-soft-button" type="button" onClick={downloadResultPdf}><Download size={16} /> Download Result PDF</button>}
     </article>
   );
 }
@@ -1721,6 +1747,23 @@ function addMinutesLocal(value, minutes) {
 function downloadCsv(filename, rows) {
   const csv = rows.map((row) => row.map((cell) => `"${String(cell ?? "").replace(/"/g, '""')}"`).join(",")).join("\n");
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = filename;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+async function downloadPdf(path, filename) {
+  const response = await fetch(`${API_URL}${path}`, {
+    headers: { Authorization: `Bearer ${getToken()}` },
+  });
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    throw new Error(data.detail || "Unable to download PDF.");
+  }
+  const blob = await response.blob();
   const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
