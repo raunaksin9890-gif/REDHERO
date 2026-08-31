@@ -1,5 +1,5 @@
 import { BookOpen, Bot, BrainCircuit, FileText, Lightbulb, MessageCircle, PenTool, Send, Sparkles } from "lucide-react";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import rehypeKatex from "rehype-katex";
 import remarkGfm from "remark-gfm";
@@ -42,10 +42,12 @@ export function AiTutor() {
   const [message, setMessage] = useState("");
   const [chat, setChat] = useState([]);
   const [busy, setBusy] = useState(false);
+  const sendingRef = useRef(false);
 
   async function submit(event) {
     event.preventDefault();
-    if (!message.trim()) return;
+    if (sendingRef.current || busy || !message.trim()) return;
+    sendingRef.current = true;
     const question = message;
     const controller = new AbortController();
     const timeoutId = window.setTimeout(() => controller.abort(), 45000);
@@ -63,8 +65,15 @@ export function AiTutor() {
       setChat((items) => [...items, { role: "assistant", content: safeAiErrorMessage(err) }]);
     } finally {
       window.clearTimeout(timeoutId);
+      sendingRef.current = false;
       setBusy(false);
     }
+  }
+
+  function handleMessageKeyDown(event) {
+    if (event.key !== "Enter" || event.shiftKey) return;
+    if (event.isComposing || event.nativeEvent?.isComposing || event.keyCode === 229) return;
+    submit(event);
   }
 
   return (
@@ -129,7 +138,13 @@ export function AiTutor() {
               <option>English</option>
               <option>Social Science</option>
             </select>
-            <input value={message} onChange={(event) => setMessage(event.target.value)} placeholder="Type your question" />
+            <textarea
+              value={message}
+              onChange={(event) => setMessage(event.target.value)}
+              onKeyDown={handleMessageKeyDown}
+              placeholder="Type your question"
+              rows={1}
+            />
             <button className="icon-button" disabled={busy} title="Send"><Send size={18} /></button>
           </form>
         </div>
@@ -369,12 +384,20 @@ const aiTutorPremiumStyles = `
   grid-template-columns: 200px 1fr 48px;
 }
 .ai-chat-panel input,
-.ai-chat-panel select {
+.ai-chat-panel select,
+.ai-chat-panel textarea {
   color: #f8fafc;
   background: rgba(10,12,18,.58);
   border-color: rgba(255,255,255,.12);
 }
-.ai-chat-panel input::placeholder { color: #778195; }
+.ai-chat-panel textarea {
+  height: 48px;
+  min-height: 48px;
+  resize: none;
+  overflow-y: auto;
+}
+.ai-chat-panel input::placeholder,
+.ai-chat-panel textarea::placeholder { color: #778195; }
 .ai-chat-panel .icon-button {
   width: 48px;
   min-width: 48px;
