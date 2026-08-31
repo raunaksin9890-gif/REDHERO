@@ -58,6 +58,7 @@ function assertFrontendPermission(path, method) {
     { pattern: /^\/auth\/users\//, roles: ["super_admin"] },
     { pattern: /^\/blogs\//, roles: ["super_admin"] },
     { pattern: /^\/current-affairs\//, roles: ["super_admin"] },
+    { pattern: /^\/timetables\//, methods: ["PUT"], roles: ["super_admin", "teacher"] },
     { pattern: /^\/timetables\//, roles: ["super_admin"] },
     { pattern: /^\/fees\//, roles: ["super_admin"] },
     { pattern: /^\/attendance\//, methods: ["DELETE"], roles: ["super_admin"] },

@@ -349,7 +349,26 @@ def notice_json(row):
 
 
 def timetable_json(row):
-    return {"id": oid(row), "class_level": row.class_level, "periods": [period.to_mongo().to_dict() for period in row.periods]}
+    periods = []
+    for period in row.periods:
+        time = str(getattr(period, "time", "") or "").strip()
+        start_time = str(getattr(period, "start_time", "") or "").strip()
+        end_time = str(getattr(period, "end_time", "") or "").strip()
+        if not start_time or not end_time:
+            parts = [part.strip() for part in time.split("-", 1)]
+            if len(parts) == 2:
+                start_time = start_time or parts[0]
+                end_time = end_time or parts[1]
+        periods.append({
+            "day": str(getattr(period, "day", "") or "").strip(),
+            "time": time,
+            "subject": str(getattr(period, "subject", "") or "").strip(),
+            "teacher": str(getattr(period, "teacher", "") or "").strip(),
+            "start_time": start_time,
+            "end_time": end_time,
+            "room": str(getattr(period, "room", "") or "").strip(),
+        })
+    return {"id": oid(row), "class_level": row.class_level, "periods": periods}
 
 
 def assignment_submission_json(submission, include_student=False):
@@ -984,7 +1003,155 @@ def notices(request):
     return ok({"notice": notice_json(row)}, status.HTTP_201_CREATED)
 
 
-@api_view(["GET", "POST", "DELETE"])
+TIMETABLE_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"]
+
+
+def _timetable_time(value, label):
+    value = str(value or "").strip()
+    try:
+        return datetime.strptime(value, "%H:%M").strftime("%H:%M")
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{label} must use HH:MM format") from exc
+
+
+def _legacy_timetable_times(value):
+    parts = [part.strip() for part in str(value or "").split("-", 1)]
+    if len(parts) != 2 or not all(parts):
+        return "", ""
+    try:
+        return _timetable_time(parts[0], "Start time"), _timetable_time(parts[1], "End time")
+    except ValueError:
+        return "", ""
+
+
+def _weekly_timetable_period(data, index, user, class_level):
+    if not isinstance(data, dict):
+        raise ValueError(f"Timetable period {index} is invalid.")
+    populated_fields = ["subject", "teacher", "room"]
+    if not any(str(data.get(field) or "").strip() for field in populated_fields):
+        return None
+
+    day = str(data.get("day") or "").strip()
+    subject = str(data.get("subject") or "").strip()
+    if day not in TIMETABLE_DAYS:
+        raise ValueError(f"Timetable period {index} requires a valid day.")
+    if not subject:
+        raise ValueError(f"Timetable period {index} requires a subject.")
+
+    start_value = str(data.get("start_time") or "").strip()
+    end_value = str(data.get("end_time") or "").strip()
+    if not start_value or not end_value:
+        legacy_start, legacy_end = _legacy_timetable_times(data.get("time"))
+        start_value = start_value or legacy_start
+        end_value = end_value or legacy_end
+    start_time = _timetable_time(start_value, "Start time")
+    end_time = _timetable_time(end_value, "End time")
+    if datetime.strptime(end_time, "%H:%M") <= datetime.strptime(start_time, "%H:%M"):
+        raise ValueError(f"Timetable period {index} end time must be after start time.")
+
+    if user.role == ROLE_TEACHER:
+        enforce_teacher_class(user, class_level)
+        assigned_subjects = [str(item).strip() for item in teacher_subjects(user) if str(item).strip()]
+        if not assigned_subjects:
+            raise PermissionDenied("Teacher has no assigned subjects")
+        if subject.lower() not in {item.lower() for item in assigned_subjects}:
+            raise PermissionDenied("Teachers can only access assigned subjects")
+
+    return TimetablePeriod(
+        day=day,
+        time=f"{start_time} - {end_time}",
+        subject=subject,
+        teacher=str(data.get("teacher") or "").strip(),
+        start_time=start_time,
+        end_time=end_time,
+        room=str(data.get("room") or "").strip(),
+    )
+
+
+def _timetable_slot(period):
+    time = str(getattr(period, "time", "") or "").strip()
+    start_time = str(getattr(period, "start_time", "") or "").strip()
+    end_time = str(getattr(period, "end_time", "") or "").strip()
+    if not start_time or not end_time:
+        start_time, end_time = _legacy_timetable_times(time)
+    return str(getattr(period, "day", "") or "").strip(), start_time, end_time
+
+
+def _validate_timetable_slots(periods):
+    slots = set()
+    for index, period in enumerate(periods, start=1):
+        day, start_time, end_time = _timetable_slot(period)
+        if not day or not start_time or not end_time:
+            continue
+        slot = (day, start_time, end_time)
+        if slot in slots:
+            raise ValueError(f"Timetable contains duplicate period {index}.")
+        slots.add(slot)
+
+
+def _save_weekly_timetable(request, user):
+    data = request.data
+    class_level = str(data.get("class_level") or "").strip()
+    if class_level not in CLASSES:
+        return bad("Select a valid class.")
+    if user.role == ROLE_TEACHER:
+        enforce_teacher_class(user, class_level)
+
+    raw_periods = data.get("periods")
+    if not isinstance(raw_periods, list):
+        return bad("Weekly timetable periods must be a list.")
+
+    try:
+        submitted_periods = [
+            period
+            for index, raw_period in enumerate(raw_periods, start=1)
+            if (period := _weekly_timetable_period(raw_period, index, user, class_level)) is not None
+        ]
+        existing = Timetable.objects(class_level=class_level).first()
+        existing_periods = list(existing.periods) if existing else []
+        if user.role == ROLE_TEACHER:
+            assigned = {str(item).strip().lower() for item in teacher_subjects(user) if str(item).strip()}
+            preserved_periods = [
+                period for period in existing_periods
+                if str(getattr(period, "subject", "") or "").strip().lower() not in assigned
+            ]
+            periods = preserved_periods + submitted_periods
+        else:
+            periods = submitted_periods
+        _validate_timetable_slots(periods)
+    except (TypeError, ValueError) as exc:
+        logger.warning("Invalid weekly timetable update for class %s by %s: %s", class_level, oid(user), exc, exc_info=True)
+        return bad(str(exc))
+
+    if not periods and existing is None:
+        logger.info("Skipped empty weekly timetable creation for class %s by %s", class_level, oid(user))
+        return ok({"timetable": None})
+
+    try:
+        row = Timetable.objects(class_level=class_level).modify(
+            upsert=True,
+            new=True,
+            set__periods=periods,
+            set__updated_at=datetime.utcnow(),
+        )
+    except (NotUniqueError, ValidationError) as exc:
+        logger.warning("Weekly timetable save failed for class %s by %s: %s", class_level, oid(user), exc, exc_info=True)
+        return bad("Timetable data is invalid.")
+
+    notify_students_for_class(
+        row.class_level,
+        "timetable",
+        "Timetable",
+        "Your class timetable has been updated.",
+        "/operations",
+        "amber",
+        "timetable",
+        row.id,
+    )
+    return ok({"timetable": timetable_json(row)})
+
+
+@api_view(["GET", "POST", "PUT", "DELETE"])
 def timetables(request):
     user = current_user(request)
     if request.method == "GET":
@@ -997,6 +1164,10 @@ def timetables(request):
         else:
             rows = Timetable.objects(class_level=class_level) if class_level else Timetable.objects
         return ok({"results": [timetable_json(row) for row in rows]})
+    if request.method == "PUT":
+        if user.role not in [ROLE_ADMIN, ROLE_TEACHER]:
+            raise PermissionDenied("You do not have permission to perform this action")
+        return _save_weekly_timetable(request, user)
     require_roles(request, [ROLE_ADMIN])
     if request.method == "DELETE":
         Timetable.objects(id=request.data.get("id") or request.GET.get("id")).delete()

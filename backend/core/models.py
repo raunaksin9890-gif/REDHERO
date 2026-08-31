@@ -139,6 +139,9 @@ class TimetablePeriod(EmbeddedDocument):
     time = StringField(required=True)
     subject = StringField(required=True)
     teacher = StringField(default="")
+    start_time = StringField(default="")
+    end_time = StringField(default="")
+    room = StringField(default="")
 
 
 class Timetable(Document):

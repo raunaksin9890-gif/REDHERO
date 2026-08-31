@@ -203,7 +203,7 @@ function OperationsDetail({ active, data, user, profile, onSaved, setMessage }) 
   if (active === "marks") return <MarksDetail data={data} user={user} onSaved={onSaved} setMessage={setMessage} />;
   if (active === "assignments") return <AssignmentsDetail data={data} user={user} onSaved={onSaved} setMessage={setMessage} />;
   if (active === "exams") return <ExamsDetail data={data} user={user} onSaved={onSaved} setMessage={setMessage} />;
-  if (active === "timetable") return <TimetableDetail data={data} user={user} onSaved={onSaved} setMessage={setMessage} />;
+  if (active === "timetable") return <TimetableDetail data={data} user={user} profile={profile} onSaved={onSaved} setMessage={setMessage} />;
   return <FeesDetail data={data} user={user} onSaved={onSaved} setMessage={setMessage} />;
 }
 
@@ -1017,13 +1017,250 @@ function requestExamFullscreen() {
   return element.requestFullscreen();
 }
 
-function TimetableDetail({ data, user, onSaved, setMessage }) {
+function TimetableDetail({ data, user, profile, onSaved, setMessage }) {
+  const canManage = ["super_admin", "teacher"].includes(user.role);
+  const [editing, setEditing] = useState(false);
   return (
     <div className="ops-detail-grid">
+      {canManage && (
+        <Panel
+          title="Manage Weekly Timetable"
+          icon={CalendarDays}
+          className="span-3"
+          action={<button className="ops-soft-button" type="button" onClick={() => setEditing((value) => !value)}><Pencil size={16} /> {editing ? "Close Editor" : "Edit Full Week"}</button>}
+        >
+          {editing && <TimetableWeeklyEditor rows={data.timetables} user={user} profile={profile} onSaved={onSaved} setMessage={setMessage} />}
+        </Panel>
+      )}
       {user.role === "super_admin" && <TimetableForm onSaved={onSaved} setMessage={setMessage} />}
       <Panel title="Weekly Timetable" icon={CalendarDays} className="span-3">
         <TimetableGrid rows={data.timetables} user={user} onSaved={onSaved} setMessage={setMessage} />
       </Panel>
+    </div>
+  );
+}
+
+const TIMETABLE_CLASSES = ["6", "7", "8", "9", "10", "11", "12"];
+const DEFAULT_TIMETABLE_SLOTS = [
+  "09:00 - 10:00",
+  "10:00 - 11:00",
+  "11:00 - 12:00",
+  "12:00 - 13:00",
+  "13:00 - 14:00",
+  "14:00 - 15:00",
+  "15:00 - 16:00",
+];
+
+function timetablePeriodParts(period) {
+  let start = String(period.start_time || "").trim();
+  let end = String(period.end_time || "").trim();
+  if ((!start || !end) && period.time) {
+    const parts = String(period.time).split("-", 2).map((item) => item.trim());
+    start = start || parts[0] || "";
+    end = end || parts[1] || "";
+  }
+  return { start, end };
+}
+
+function timetableSlotKey(day, time) {
+  return `${day}::${time}`;
+}
+
+function sortTimetableSlots(slots) {
+  return [...new Set(slots.filter(Boolean))].sort((first, second) => {
+    const firstStart = Number(String(first).slice(0, 2)) * 60 + Number(String(first).slice(3, 5));
+    const secondStart = Number(String(second).slice(0, 2)) * 60 + Number(String(second).slice(3, 5));
+    if (Number.isFinite(firstStart) && Number.isFinite(secondStart) && firstStart !== secondStart) return firstStart - secondStart;
+    return String(first).localeCompare(String(second));
+  });
+}
+
+function TimetableWeeklyEditor({ rows, user, profile, onSaved, setMessage }) {
+  const toast = useToast();
+  const classOptions = useMemo(() => {
+    const values = user.role === "teacher"
+      ? [...(profile?.assigned_classes || []), ...rows.map((row) => row.class_level)]
+      : TIMETABLE_CLASSES;
+    return [...new Set(values.map((value) => String(value || "").trim()).filter((value) => TIMETABLE_CLASSES.includes(value)))].sort((first, second) => Number(first) - Number(second));
+  }, [profile, rows, user.role]);
+  const [classLevel, setClassLevel] = useState("");
+  const [draft, setDraft] = useState({});
+  const [customSlots, setCustomSlots] = useState([]);
+  const [newStart, setNewStart] = useState("");
+  const [newEnd, setNewEnd] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!classOptions.includes(classLevel)) setClassLevel(classOptions[0] || "");
+  }, [classLevel, classOptions]);
+
+  const row = rows.find((item) => item.class_level === classLevel);
+  const existingPeriods = row?.periods || [];
+  const slots = useMemo(() => sortTimetableSlots([
+    ...DEFAULT_TIMETABLE_SLOTS,
+    ...customSlots,
+    ...existingPeriods.map((period) => period.time),
+  ]), [customSlots, existingPeriods]);
+  const lockedKeys = useMemo(() => {
+    if (user.role !== "teacher") return new Set();
+    const subjects = new Set((profile?.subjects || []).map((item) => String(item || "").trim().toLowerCase()).filter(Boolean));
+    return new Set(existingPeriods
+      .filter((period) => period.subject && !subjects.has(String(period.subject).trim().toLowerCase()))
+      .map((period) => timetableSlotKey(period.day, period.time)));
+  }, [existingPeriods, profile, user.role]);
+  const subjectOptions = useMemo(() => [...new Set((profile?.subjects || []).map((item) => String(item || "").trim()).filter(Boolean))], [profile]);
+
+  useEffect(() => {
+    const next = {};
+    existingPeriods.forEach((period) => {
+      const day = String(period.day || "").trim();
+      const time = String(period.time || "").trim();
+      if (!day || !time) return;
+      const parts = timetablePeriodParts(period);
+      next[timetableSlotKey(day, time)] = {
+        day,
+        time,
+        start_time: parts.start,
+        end_time: parts.end,
+        subject: String(period.subject || ""),
+        teacher: String(period.teacher || ""),
+        room: String(period.room || ""),
+      };
+    });
+    setDraft(next);
+    setCustomSlots([]);
+  }, [classLevel, row]);
+
+  function updateCell(day, time, patch) {
+    const key = timetableSlotKey(day, time);
+    setDraft((previous) => {
+      const current = previous[key] || { day, time, start_time: "", end_time: "", subject: "", teacher: "", room: "" };
+      const next = { ...current, ...patch };
+      if (patch.subject && !next.start_time && !next.end_time) {
+        const parts = timetablePeriodParts({ time });
+        next.start_time = parts.start;
+        next.end_time = parts.end;
+      }
+      return { ...previous, [key]: next };
+    });
+  }
+
+  function clearCell(day, time) {
+    const key = timetableSlotKey(day, time);
+    setDraft((previous) => {
+      const next = { ...previous };
+      delete next[key];
+      return next;
+    });
+  }
+
+  function addPeriodSlot(event) {
+    event.preventDefault();
+    if (!newStart || !newEnd || newEnd <= newStart) {
+      const message = "End time must be after start time.";
+      setMessage(message);
+      toast?.show(message, "error");
+      return;
+    }
+    const slot = `${newStart} - ${newEnd}`;
+    setCustomSlots((previous) => [...new Set([...previous, slot])]);
+    setNewStart("");
+    setNewEnd("");
+  }
+
+  async function saveWeek(event) {
+    event.preventDefault();
+    const periods = [];
+    for (const cell of Object.values(draft)) {
+      const subject = String(cell.subject || "").trim();
+      const hasValues = [subject, cell.teacher, cell.start_time, cell.end_time, cell.room].some((value) => String(value || "").trim());
+      if (!hasValues || lockedKeys.has(timetableSlotKey(cell.day, cell.time))) continue;
+      if (!subject) {
+        const message = `Subject is required for ${cell.day} ${cell.time}.`;
+        setMessage(message);
+        toast?.show(message, "error");
+        return;
+      }
+      if (!cell.start_time || !cell.end_time) {
+        const message = `Start and end time are required for ${cell.day} ${cell.time}.`;
+        setMessage(message);
+        toast?.show(message, "error");
+        return;
+      }
+      periods.push({
+        day: cell.day,
+        subject,
+        teacher: String(cell.teacher || "").trim(),
+        start_time: cell.start_time,
+        end_time: cell.end_time,
+        room: String(cell.room || "").trim(),
+      });
+    }
+    try {
+      setSaving(true);
+      await api("/timetables/", { method: "PUT", body: JSON.stringify({ class_level: classLevel, periods }) });
+      setMessage("Weekly timetable saved");
+      toast?.show("Weekly timetable saved");
+      await onSaved();
+    } catch (err) {
+      setMessage(err.message);
+      toast?.show(err.message, "error");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (!classLevel) return <EmptyState title="No assigned class available" />;
+  return (
+    <div className="ops-week-editor">
+      <div className="ops-week-editor-toolbar">
+        <label>Class<select value={classLevel} onChange={(event) => setClassLevel(event.target.value)}>{classOptions.map((item) => <option key={item} value={item}>Class {item}</option>)}</select></label>
+        <div className="ops-week-add-slot">
+          <span>Add period</span>
+          <input type="time" value={newStart} onChange={(event) => setNewStart(event.target.value)} aria-label="New period start time" />
+          <input type="time" value={newEnd} onChange={(event) => setNewEnd(event.target.value)} aria-label="New period end time" />
+          <button className="ops-soft-button" type="button" onClick={addPeriodSlot}><Plus size={15} /> Add period</button>
+        </div>
+      </div>
+      <form onSubmit={saveWeek}>
+        <div className="ops-table-wrap">
+          <table className="ops-timetable ops-week-table">
+            <thead><tr><th>Time</th>{DAYS.map((day) => <th key={day}>{day}</th>)}</tr></thead>
+            <tbody>
+              {slots.map((time) => (
+                <tr key={time}>
+                  <th>{time}</th>
+                  {DAYS.map((day) => {
+                    const key = timetableSlotKey(day, time);
+                    const cell = draft[key] || { day, time, subject: "", teacher: "", start_time: "", end_time: "", room: "" };
+                    const locked = lockedKeys.has(key);
+                    return (
+                      <td key={day}>
+                        <div className="ops-week-cell" title={locked ? "This subject is outside your assigned subjects" : undefined}>
+                          {user.role === "teacher" ? (
+                            <select value={cell.subject} disabled={locked} onChange={(event) => updateCell(day, time, { subject: event.target.value })} aria-label={`${day} subject`}>
+                              <option value="">Subject</option>
+                              {subjectOptions.map((subject) => <option key={subject} value={subject}>{subject}</option>)}
+                            </select>
+                          ) : <input value={cell.subject} disabled={locked} onChange={(event) => updateCell(day, time, { subject: event.target.value })} placeholder="Subject" aria-label={`${day} subject`} />}
+                          <input value={cell.teacher} disabled={locked} onChange={(event) => updateCell(day, time, { teacher: event.target.value })} placeholder="Teacher" aria-label={`${day} teacher`} />
+                          <div className="ops-week-time-fields">
+                            <input type="time" value={cell.start_time} disabled={locked} onChange={(event) => updateCell(day, time, { start_time: event.target.value })} aria-label={`${day} start time`} />
+                            <input type="time" value={cell.end_time} disabled={locked} onChange={(event) => updateCell(day, time, { end_time: event.target.value })} aria-label={`${day} end time`} />
+                          </div>
+                          <input value={cell.room} disabled={locked} onChange={(event) => updateCell(day, time, { room: event.target.value })} placeholder="Room/location" aria-label={`${day} room`} />
+                          {!locked && <button className="ops-icon danger" type="button" title={`Clear ${day} ${time}`} aria-label={`Clear ${day} ${time}`} onClick={() => clearCell(day, time)}><X size={14} /></button>}
+                        </div>
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <button className="ops-red-button ops-week-save" type="submit" disabled={saving}><Save size={16} /> {saving ? "Saving..." : "Save Week"}</button>
+      </form>
     </div>
   );
 }
@@ -2144,6 +2381,21 @@ const operationsCenterStyles = `
 .ops-period { display: grid; gap: 4px; min-width: 126px; padding: 9px; border-radius: 8px; background: linear-gradient(135deg, rgba(29,78,216,.24), rgba(127,16,32,.2)); border: 1px solid rgba(148,163,184,.14); }
 .ops-period strong { color: #fff; }
 .ops-period span, .ops-period small { color: #a9bad2; }
+.ops-week-editor { display: grid; gap: 12px; }
+.ops-week-editor-toolbar { display: flex; align-items: end; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.ops-week-editor-toolbar label { display: grid; gap: 6px; color: #8ea0b8; font-size: 12px; font-weight: 850; }
+.ops-week-editor-toolbar select, .ops-week-add-slot input { min-height: 36px; padding: 7px 9px; border: 1px solid rgba(148,163,184,.18); border-radius: 6px; background: rgba(4,10,20,.72); color: #f8fafc; }
+.ops-week-add-slot { display: flex; align-items: end; gap: 8px; flex-wrap: wrap; }
+.ops-week-add-slot span { align-self: center; color: #8ea0b8; font-size: 12px; font-weight: 850; }
+.ops-week-table { min-width: 1280px; }
+.ops-week-table th, .ops-week-table td { min-width: 184px; }
+.ops-week-table > thead th:first-child, .ops-week-table > tbody th { min-width: 126px; }
+.ops-week-cell { display: grid; gap: 6px; min-width: 168px; padding: 8px; border: 1px solid rgba(148,163,184,.14); border-radius: 8px; background: rgba(4,10,20,.38); }
+.ops-week-cell input, .ops-week-cell select { width: 100%; min-width: 0; min-height: 31px; padding: 6px 7px; border: 1px solid rgba(148,163,184,.18); border-radius: 6px; background: rgba(4,10,20,.72); color: #f8fafc; font-size: 11px; }
+.ops-week-cell input:disabled, .ops-week-cell select:disabled { opacity: .58; cursor: not-allowed; }
+.ops-week-time-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px; }
+.ops-week-cell .ops-icon { justify-self: end; width: 28px; min-width: 28px; height: 28px; }
+.ops-week-save { justify-self: start; margin-top: 2px; }
 .exam-question-form { margin-bottom: 12px; padding: 12px; border: 1px solid rgba(148,163,184,.14); border-radius: 8px; background: rgba(4,10,20,.38); }
 .bulk-import-form { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .bulk-import-form input[type="file"] { color: #dbeafe; font-size: 12.5px; max-width: 280px; }
@@ -2250,6 +2502,9 @@ const operationsCenterStyles = `
   .quick-attendance-list > button { flex-basis: 100%; }
   .ops-metric-row { grid-template-columns: 1fr; }
   .ops-table-wrap table { min-width: max-content; }
+  .ops-week-editor-toolbar, .ops-week-add-slot { align-items: stretch; }
+  .ops-week-editor-toolbar label, .ops-week-add-slot { width: 100%; }
+  .ops-week-add-slot input, .ops-week-add-slot .ops-soft-button { flex: 1 1 0; }
 }
 
 html[data-theme="light"] .operations-center {
