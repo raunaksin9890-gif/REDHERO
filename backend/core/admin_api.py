@@ -1523,14 +1523,18 @@ def mistake_json(row):
 
 
 def topic_status(attempts, correct):
-    if attempts < 3:
-        return "Needs Practice"
-    accuracy = (correct / attempts) * 100 if attempts else 0
-    if accuracy >= 75:
+    accuracy = topic_accuracy(attempts, correct)
+    if accuracy >= 80:
         return "Strong"
     if accuracy >= 50:
         return "Needs Practice"
     return "Weak"
+
+
+def topic_accuracy(attempts, correct):
+    attempts = attempts or 0
+    correct = correct or 0
+    return round((correct / attempts) * 100, 2) if attempts else 0
 
 
 def update_practice_tracking(student, question, correct, source="practice", answer_text=""):
@@ -1545,7 +1549,7 @@ def update_practice_tracking(student, question, correct, source="practice", answ
         performance.update(
             attempts=attempts,
             correct=correct_count,
-            accuracy=round((correct_count / attempts) * 100, 2),
+            accuracy=topic_accuracy(attempts, correct_count),
             status=topic_status(attempts, correct_count),
             updated_at=now,
         )
@@ -1607,6 +1611,17 @@ def practice_session_json(session, include_correct=False):
         item["correct"] = answer.correct if answer and include_correct else False
         item["marks_awarded"] = answer.marks_awarded if answer and include_correct else 0
         questions.append(item)
+    topic_performance = []
+    for row in session.topic_performance or []:
+        attempts = row.get("attempts", 0) or 0
+        correct = row.get("correct", 0) or 0
+        topic_performance.append(
+            {
+                **row,
+                "accuracy": topic_accuracy(attempts, correct),
+                "status": topic_status(attempts, correct),
+            }
+        )
     return {
         "id": oid(session),
         "session_type": session.session_type,
@@ -1620,7 +1635,7 @@ def practice_session_json(session, include_correct=False):
         "incorrect_count": session.incorrect_count,
         "score": session.score,
         "accuracy": session.accuracy,
-        "topic_performance": session.topic_performance,
+        "topic_performance": topic_performance,
         "started_at": dt(session.started_at),
         "submitted_at": dt(session.submitted_at),
         "questions": questions,
@@ -1648,12 +1663,12 @@ def select_daily_questions(student, limit):
             return selected
 
     # If more questions are needed, prefer the student's weak topics.
-    weak_topics = list(
-        TopicPerformance.objects(
-            student=student,
-            status__in=["Weak", "Needs Practice"]
-        ).order_by("accuracy")[:8]
-    )
+    weak_topics = [
+        topic for topic in TopicPerformance.objects(student=student)
+        if topic_status(topic.attempts, topic.correct) in ["Weak", "Needs Practice"]
+    ]
+    weak_topics.sort(key=lambda topic: (topic_accuracy(topic.attempts, topic.correct), -topic.attempts))
+    weak_topics = weak_topics[:8]
 
     for topic in weak_topics:
         questions = QuestionBankQuestion.objects(
@@ -1796,7 +1811,7 @@ def submit_practice_session(session):
         update_practice_tracking(session.student, question, is_correct, "practice", answer.answer)
     topic_rows = []
     for row in topic_map.values():
-        accuracy = round((row["correct"] / row["attempts"]) * 100, 2) if row["attempts"] else 0
+        accuracy = topic_accuracy(row["attempts"], row["correct"])
         topic_rows.append({**row, "accuracy": accuracy, "status": topic_status(row["attempts"], row["correct"])})
     total = len(session.questions)
     session.update(
@@ -1806,7 +1821,7 @@ def submit_practice_session(session):
         correct_count=correct_count,
         incorrect_count=max(0, total - correct_count),
         score=score,
-        accuracy=round((correct_count / total) * 100, 2) if total else 0,
+        accuracy=topic_accuracy(total, correct_count),
         topic_performance=topic_rows,
         submitted_at=now,
         updated_at=now,
@@ -1821,16 +1836,19 @@ def evaluate_practice_answer(question, answer):
 
 
 def topic_performance_json(row):
+    attempts = row.attempts or 0
+    correct = row.correct or 0
+    accuracy = topic_accuracy(attempts, correct)
     return {
         "id": oid(row),
         "student": student_json(row.student) if row.student else None,
         "class_level": row.class_level,
         "subject": row.subject,
         "chapter": row.chapter,
-        "attempts": row.attempts,
-        "correct": row.correct,
-        "accuracy": row.accuracy,
-        "status": row.status,
+        "attempts": attempts,
+        "correct": correct,
+        "accuracy": accuracy,
+        "status": topic_status(attempts, correct),
         "updated_at": dt(row.updated_at),
     }
 
@@ -1899,16 +1917,23 @@ def planner_candidates(student):
             scope,
         ))
 
-    weak_rows = TopicPerformance.objects(student=student, status__in=["Weak", "Needs Practice"]).order_by("accuracy", "-attempts")[:4]
+    weak_rows = [
+        row for row in TopicPerformance.objects(student=student)
+        if topic_status(row.attempts, row.correct) in ["Weak", "Needs Practice"]
+    ]
+    weak_rows.sort(key=lambda row: (topic_accuracy(row.attempts, row.correct), -row.attempts))
+    weak_rows = weak_rows[:4]
     for row in weak_rows:
+        status_value = topic_status(row.attempts, row.correct)
+        accuracy = topic_accuracy(row.attempts, row.correct)
         tasks.append(study_task(
             f"weak:{row.subject}:{row.chapter}",
             f"Revise {row.chapter}",
             "Weak Topic",
             row.subject,
             row.chapter,
-            f"{row.status} topic with {round(row.accuracy or 0)}% accuracy",
-            30 if row.status == "Weak" else 20,
+            f"{status_value} topic with {round(accuracy)}% accuracy",
+            30 if status_value == "Weak" else 20,
             learning_links_for(student, row.subject, row.chapter) or "/practice-progress",
             "today",
         ))
@@ -2217,11 +2242,16 @@ def weak_topics(request):
         subjects = teacher_subjects(user)
         if subjects:
             query = query(subject__in=subjects)
-    for key in ["class_level", "subject", "chapter", "status"]:
+    for key in ["class_level", "subject", "chapter"]:
         value = request.GET.get(key)
         if value:
             query = query(**{key: value})
-    return ok({"results": [topic_performance_json(row) for row in query.order_by("accuracy", "-attempts")[:250]]})
+    rows = list(query)
+    requested_status = request.GET.get("status")
+    if requested_status:
+        rows = [row for row in rows if topic_status(row.attempts, row.correct) == requested_status]
+    rows.sort(key=lambda row: (topic_accuracy(row.attempts, row.correct), -row.attempts))
+    return ok({"results": [topic_performance_json(row) for row in rows[:250]]})
 
 
 @api_view(["GET"])
@@ -2282,7 +2312,12 @@ def practice_analytics(request):
         topic_rows.append(topic_performance_json(row))
     def mapped(data):
         return [
-            {"label": key, "attempts": value["attempts"], "accuracy": round((value["correct"] / value["attempts"]) * 100, 2) if value["attempts"] else 0}
+            {
+                "label": key,
+                "attempts": value["attempts"],
+                "accuracy": topic_accuracy(value["attempts"], value["correct"]),
+                "status": topic_status(value["attempts"], value["correct"]),
+            }
             for key, value in data.items()
         ]
     sessions = PracticeSession.objects

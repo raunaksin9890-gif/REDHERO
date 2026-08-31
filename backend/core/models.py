@@ -431,7 +431,7 @@ class TopicPerformance(Document):
     attempts = IntField(default=0)
     correct = IntField(default=0)
     accuracy = FloatField(default=0)
-    status = StringField(default="Needs Practice", choices=["Strong", "Needs Practice", "Weak"])
+    status = StringField(default="Weak", choices=["Strong", "Needs Practice", "Weak"])
     updated_at = DateTimeField(default=datetime.utcnow)
 
     meta = {"collection": "TopicPerformance", "indexes": ["student", "class_level", "subject", "chapter", "status", "-updated_at"]}

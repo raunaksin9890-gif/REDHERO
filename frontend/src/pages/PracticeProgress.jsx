@@ -628,10 +628,10 @@ function PracticeAnalytics({ analytics }) {
     <div className="practice-grid">
       <MetricDeck metrics={[["Practice Sessions", data.practice_participation || 0], ["Difficult Topics", data.difficult_topics?.length || 0], ["Classes", data.class_performance?.length || 0], ["Subjects", data.subject_performance?.length || 0]]} />
       <Panel title="Class Performance" icon={BarChart3}>
-        <TopicMiniList rows={(data.class_performance || []).map((row) => ({ chapter: row.label, accuracy: row.accuracy, attempts: row.attempts, status: row.accuracy >= 75 ? "Strong" : row.accuracy >= 50 ? "Needs Practice" : "Weak" }))} />
+        <TopicMiniList rows={(data.class_performance || []).map((row) => ({ chapter: row.label, accuracy: row.accuracy, attempts: row.attempts, status: row.status }))} />
       </Panel>
       <Panel title="Subject Accuracy" icon={BookOpen}>
-        <TopicMiniList rows={(data.subject_performance || []).map((row) => ({ chapter: row.label, accuracy: row.accuracy, attempts: row.attempts, status: row.accuracy >= 75 ? "Strong" : row.accuracy >= 50 ? "Needs Practice" : "Weak" }))} />
+        <TopicMiniList rows={(data.subject_performance || []).map((row) => ({ chapter: row.label, accuracy: row.accuracy, attempts: row.attempts, status: row.status }))} />
       </Panel>
       <Panel title="Most Difficult Topics" icon={Target} className="span-3">
         <DataTable columns={["Class", "Subject", "Topic", "Accuracy", "Attempts", "Status"]} rows={(data.difficult_topics || []).map((row) => [row.class_level, row.subject, row.chapter, `${Math.round(row.accuracy || 0)}%`, row.attempts, <StatusBadge value={row.status} />])} empty="No practice analytics available yet." />
