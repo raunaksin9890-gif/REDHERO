@@ -268,13 +268,19 @@ def parse_ai_items(text_value):
 def save_current_affairs_digest(items, source_articles, created_by=None, dry_run=False):
     source_by_id = {index: article for index, article in enumerate(source_articles)}
     admin = created_by or User.objects(role=ROLE_ADMIN).first()
-    stats = {"validated": 0, "rejected": 0, "duplicates": 0, "created": 0, "would_create": 0}
+    stats = {"validated": 0, "rejected": 0, "duplicates": 0, "created": 0, "would_create": 0, "replaced": 0}
     if not admin and not dry_run:
         logger.warning("No admin user exists; cannot save AI current affairs digest.")
         stats["rejected"] = len(items)
         return stats
     today_ist = datetime.now(IST).date().isoformat()
+    candidates = []
+    seen_sources = set()
+    seen_titles = set()
     for item in items:
+        if not isinstance(item, dict):
+            stats["rejected"] += 1
+            continue
         source = source_by_id.get(safe_int(item.get("source_id")))
         if not source or not is_valid_digest_item(item, source):
             stats["rejected"] += 1
@@ -282,6 +288,9 @@ def save_current_affairs_digest(items, source_articles, created_by=None, dry_run
         stats["validated"] += 1
         source_key = normalize_url(source.source_url)
         normalized_title = normalize_title(item["title"])
+        if source_key in seen_sources or normalized_title in seen_titles:
+            stats["duplicates"] += 1
+            continue
         title_duplicate = CurrentAffair.objects(
             title__iexact=item["title"].strip(),
             published_on__gte=source.published_on - timedelta(days=1),
@@ -290,25 +299,53 @@ def save_current_affairs_digest(items, source_articles, created_by=None, dry_run
         if CurrentAffair.objects(source_url=source_key).first() or title_duplicate:
             stats["duplicates"] += 1
             continue
-        if dry_run:
-            stats["would_create"] += 1
-            continue
-        CurrentAffair(
-            title=item["title"].strip(),
-            summary=item["summary"].strip(),
-            content=item["content"].strip(),
-            category=normalize_category(item["category"]),
-            source_url=source_key,
-            source_name=source.source_name,
-            image_url=normalize_url(source.image_url),
-            generated_by_ai=True,
-            digest_date=today_ist,
-            fetched_at=datetime.utcnow(),
-            published_on=source.published_on.replace(tzinfo=None),
-            created_by=admin,
-        ).save()
-        stats["created"] += 1
-        logger.info("Saved AI current affair: %s", normalized_title)
+        seen_sources.add(source_key)
+        seen_titles.add(normalized_title)
+        candidates.append((item, source, source_key))
+    if not candidates:
+        logger.warning("Current affairs update produced no new valid items; previous batch retained.")
+        return stats
+    if dry_run:
+        stats["would_create"] = len(candidates)
+        return stats
+
+    created_rows = []
+    try:
+        for item, source, source_key in candidates:
+            row = CurrentAffair(
+                title=item["title"].strip(),
+                summary=item["summary"].strip(),
+                content=item["content"].strip(),
+                category=normalize_category(item["category"]),
+                source_url=source_key,
+                source_name=source.source_name,
+                image_url=normalize_url(source.image_url),
+                generated_by_ai=True,
+                digest_date=today_ist,
+                fetched_at=datetime.utcnow(),
+                published_on=source.published_on.replace(tzinfo=None),
+                created_by=admin,
+            ).save()
+            created_rows.append(row)
+            stats["created"] += 1
+            logger.info("Saved AI current affair: %s", normalize_title(item["title"]))
+    except Exception as exc:
+        logger.warning("Current affairs batch save failed; previous batch retained: %s", exc, exc_info=True)
+        for row in created_rows:
+            try:
+                row.delete()
+            except Exception:
+                logger.warning("Unable to remove partial current affair %s after batch failure.", getattr(row, "id", None), exc_info=True)
+        stats["created"] = 0
+        return stats
+
+    try:
+        created_ids = [row.id for row in created_rows]
+        stats["replaced"] = CurrentAffair.objects(id__nin=created_ids).delete()
+        logger.info("Replaced previous Current Affairs batch; removed %s records.", stats["replaced"])
+    except Exception as exc:
+        logger.warning("New Current Affairs batch saved but previous batch cleanup failed: %s", exc, exc_info=True)
+        return stats
     return stats
 
 
