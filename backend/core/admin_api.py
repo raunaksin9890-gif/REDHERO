@@ -126,6 +126,14 @@ def get_teacher_for_user(user):
     return Teacher.objects(user=user).first()
 
 
+def select_related_rows(query, context):
+    try:
+        return query.select_related(max_depth=1)
+    except Exception as exc:
+        logger.warning("Related-data prefetch failed for %s; using lazy loading: %s", context, exc, exc_info=True)
+        return query
+
+
 def teacher_classes(user):
     teacher = get_teacher_for_user(user)
     return teacher.assigned_classes if teacher else []
@@ -357,8 +365,9 @@ def assignment_submission_json(submission, include_student=False):
     return data
 
 
-def assignment_status_for(row, student=None):
-    submission = AssignmentSubmission.objects(assignment=row, student=student).first() if student else None
+def assignment_status_for(row, student=None, submission=None):
+    if submission is None and student:
+        submission = AssignmentSubmission.objects(assignment=row, student=student).first()
     if submission:
         return "Completed" if submission.status == "reviewed" else "Submitted"
     return "Overdue" if row.deadline and row.deadline < datetime.utcnow() else "Pending"
@@ -370,8 +379,12 @@ def assignment_manager_status(row, submission_count):
     return "Overdue" if row.deadline and row.deadline < datetime.utcnow() else "Pending"
 
 
-def assignment_json(row, user):
-    submissions = list(AssignmentSubmission.objects(assignment=row).order_by("-submitted_at"))
+def assignment_json(row, user, student=None, submissions=None, own_submission=None):
+    submissions = list(submissions) if submissions is not None else list(AssignmentSubmission.objects(assignment=row).order_by("-submitted_at"))
+    if user.role == ROLE_STUDENT and student is None:
+        student = get_student_for_user(user)
+    if user.role == ROLE_STUDENT and own_submission is None and student:
+        own_submission = next((item for item in submissions if item.student == student), None)
     data = {
         "id": oid(row),
         "title": row.title,
@@ -386,10 +399,8 @@ def assignment_json(row, user):
         "submission_count": len(submissions),
     }
     if user.role == ROLE_STUDENT:
-        student = get_student_for_user(user)
-        own = AssignmentSubmission.objects(assignment=row, student=student).first() if student else None
-        data["own_submission"] = assignment_submission_json(own) if own else None
-        data["status"] = assignment_status_for(row, student)
+        data["own_submission"] = assignment_submission_json(own_submission) if own_submission else None
+        data["status"] = assignment_status_for(row, student, own_submission)
     else:
         data["submissions"] = [assignment_submission_json(item, include_student=True) for item in submissions]
         data["status"] = assignment_manager_status(row, len(submissions))
@@ -623,7 +634,7 @@ def attendance(request):
         else:
             rows = Attendance.objects.order_by("-date")
         results = []
-        for row in rows:
+        for row in select_related_rows(rows, "attendance serialization"):
             serialized = safe_attendance_json(row)
             if serialized is not None:
                 results.append(serialized)
@@ -770,7 +781,8 @@ def marks(request):
             rows = Marks.objects(class_level__in=teacher_classes(user))
         else:
             rows = Marks.objects
-        return ok({"results": [marks_json(row) for row in rows.order_by("-created_at")]})
+        rows = rows.order_by("-created_at")
+        return ok({"results": [marks_json(row) for row in select_related_rows(rows, "marks serialization")]})
     require_roles(request, [ROLE_ADMIN, ROLE_TEACHER])
     data = request.data
     if request.method in ["PUT", "DELETE"]:
@@ -1076,14 +1088,22 @@ def fee_student_rows(user, structures, requested_status=""):
     query = scoped_students(user)
     if structure_map:
         query = query(class_level__in=list(structure_map.keys()))
+    students = list(query.order_by("student_id"))
+    payments = list(select_related_rows(
+        FeePayment.objects(student__in=students).order_by("-payment_date"),
+        "fee payments",
+    )) if students else []
+    payments_by_student = {}
+    for payment in payments:
+        payments_by_student.setdefault(oid(payment.student), []).append(payment)
     rows = []
     summary = {"total_fees": 0, "paid": 0, "pending": 0, "overdue": 0}
-    for student in query.order_by("student_id"):
+    for student in students:
         fee = structure_map.get(student.class_level)
         if not fee:
             continue
-        payments = list(FeePayment.objects(student=student).order_by("-payment_date"))
-        paid = sum(float(payment.amount or 0) for payment in payments)
+        student_payments = payments_by_student.get(oid(student), [])
+        paid = sum(float(payment.amount or 0) for payment in student_payments)
         total = float(fee.annual_fee or 0)
         pending = max(0, total - paid)
         status_value = fee_status(total, paid, getattr(fee, "due_date", None))
@@ -1104,7 +1124,7 @@ def fee_student_rows(user, structures, requested_status=""):
                 "due_date": dt(getattr(fee, "due_date", None)),
                 "status": status_value,
                 "installments": fee.installments,
-                "payments": [payment_json(payment) for payment in payments],
+                "payments": [payment_json(payment) for payment in student_payments],
             }
         )
     return rows, summary
@@ -1336,7 +1356,34 @@ def current_affairs(request):
 def assignments(request):
     user, query = class_query(request, Assignment)
     if request.method == "GET":
-        return ok({"results": [assignment_json(row, user) for row in query.order_by("deadline")]})
+        rows = list(select_related_rows(query.order_by("deadline"), "assignment list"))
+        if not rows:
+            return ok({"results": []})
+        student = get_student_for_user(user) if user.role == ROLE_STUDENT else None
+        submissions = list(select_related_rows(
+            AssignmentSubmission.objects(assignment__in=rows).order_by("-submitted_at"),
+            "assignment submissions",
+        ))
+        submissions_by_assignment = {}
+        for submission in submissions:
+            submissions_by_assignment.setdefault(oid(submission.assignment), []).append(submission)
+        results = []
+        for row in rows:
+            row_submissions = submissions_by_assignment.get(oid(row), [])
+            own_submission = next(
+                (item for item in row_submissions if student and item.student == student),
+                None,
+            )
+            results.append(
+                assignment_json(
+                    row,
+                    user,
+                    student=student,
+                    submissions=row_submissions,
+                    own_submission=own_submission,
+                )
+            )
+        return ok({"results": results})
     require_roles(request, [ROLE_ADMIN, ROLE_TEACHER])
     data = request.data
     if request.method in ["PUT", "DELETE"]:
@@ -2537,11 +2584,17 @@ def attempt_json(attempt, include_answers=False, include_student=False, include_
     return data
 
 
-def exam_json(exam, user, include_questions=False, include_attempts=False):
-    attempt = None
+EXAM_ATTEMPT_UNSET = object()
+
+
+def exam_json(exam, user, include_questions=False, include_attempts=False, student=None, attempt=EXAM_ATTEMPT_UNSET, attempts=None):
     if user.role == ROLE_STUDENT:
-        student = get_student_for_user(user)
-        attempt = ExamAttempt.objects(exam=exam, student=student).first() if student else None
+        if student is None:
+            student = get_student_for_user(user)
+        if attempt is EXAM_ATTEMPT_UNSET:
+            attempt = ExamAttempt.objects(exam=exam, student=student).first() if student else None
+    elif attempt is EXAM_ATTEMPT_UNSET:
+        attempt = None
     data = {
         "id": oid(exam),
         "name": exam.name,
@@ -2568,13 +2621,14 @@ def exam_json(exam, user, include_questions=False, include_attempts=False):
     if include_questions:
         data["questions"] = [question_json(question, include_correct=user.role != ROLE_STUDENT) for question in sorted(exam.questions, key=lambda item: item.order)]
     if include_attempts and user.role != ROLE_STUDENT:
-        data["attempts"] = [attempt_json(row, include_answers=True, include_student=True) for row in ExamAttempt.objects(exam=exam).order_by("-updated_at")]
+        exam_attempts = attempts if attempts is not None else ExamAttempt.objects(exam=exam).order_by("-updated_at")
+        data["attempts"] = [attempt_json(row, include_answers=True, include_student=True) for row in exam_attempts]
     return data
 
 
-def visible_exams_for_user(user):
+def visible_exams_for_user(user, student=None):
     if user.role == ROLE_STUDENT:
-        student = get_student_for_user(user)
+        student = student or get_student_for_user(user)
         return Exam.objects(class_level=student.class_level, is_published=True) if student else Exam.objects(class_level="__none__")
     if user.role == ROLE_TEACHER:
         return Exam.objects(class_level__in=teacher_classes(user))
@@ -2687,12 +2741,37 @@ def auto_submit_reason_from_request(reason):
 def exams(request):
     user = require_roles(request, [ROLE_ADMIN, ROLE_TEACHER, ROLE_STUDENT])
     if request.method == "GET":
-        query = visible_exams_for_user(user)
+        student = get_student_for_user(user) if user.role == ROLE_STUDENT else None
+        query = visible_exams_for_user(user, student=student)
         for key in ["class_level", "subject"]:
             value = request.GET.get(key)
             if value:
                 query = query(**{key: value})
-        return ok({"server_time": dt(store_schedule_time(schedule_now())), "results": [exam_json(row, user, include_questions=user.role != ROLE_STUDENT, include_attempts=user.role != ROLE_STUDENT) for row in query.order_by("-start_time")]})
+        rows = list(select_related_rows(query.order_by("-start_time"), "exam list"))
+        attempts_by_exam = {}
+        if rows:
+            attempts_query = ExamAttempt.objects(exam__in=rows).order_by("-updated_at")
+            if student:
+                attempts_query = attempts_query(student=student)
+            for attempt in select_related_rows(attempts_query, "exam attempts"):
+                attempts_by_exam.setdefault(oid(attempt.exam), []).append(attempt)
+        return ok(
+            {
+                "server_time": dt(store_schedule_time(schedule_now())),
+                "results": [
+                    exam_json(
+                        row,
+                        user,
+                        include_questions=user.role != ROLE_STUDENT,
+                        include_attempts=user.role != ROLE_STUDENT,
+                        student=student,
+                        attempt=(attempts_by_exam.get(oid(row)) or [None])[0] if student else EXAM_ATTEMPT_UNSET,
+                        attempts=attempts_by_exam.get(oid(row), []),
+                    )
+                    for row in rows
+                ],
+            }
+        )
     require_roles_for_user(user, [ROLE_ADMIN, ROLE_TEACHER])
     data = request.data
     if request.method in ["PUT", "DELETE"]:

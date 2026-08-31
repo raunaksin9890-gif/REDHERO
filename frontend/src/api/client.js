@@ -4,21 +4,30 @@ function normalizeApiUrl(value) {
 }
 
 const API_URL = normalizeApiUrl(import.meta.env.VITE_API_URL);
+const GET_CACHE_TTL_MS = 15000;
+const getCache = new Map();
+const inFlightGets = new Map();
 
 export function getToken() {
   return localStorage.getItem("redhero_access");
 }
 
 export function saveSession(payload) {
+  clearApiCache();
   localStorage.setItem("redhero_access", payload.access);
   localStorage.setItem("redhero_refresh", payload.refresh);
   localStorage.setItem("redhero_user", JSON.stringify(payload.user));
 }
 
 export function clearSession() {
+  clearApiCache();
   localStorage.removeItem("redhero_access");
   localStorage.removeItem("redhero_refresh");
   localStorage.removeItem("redhero_user");
+}
+
+export function clearApiCache() {
+  getCache.clear();
 }
 
 function currentRole() {
@@ -26,6 +35,17 @@ function currentRole() {
     return JSON.parse(localStorage.getItem("redhero_user") || "{}").role;
   } catch {
     return undefined;
+  }
+}
+
+function currentCacheScope() {
+  if (!getToken()) return "";
+  try {
+    const user = JSON.parse(localStorage.getItem("redhero_user") || "{}");
+    const identity = user.id || user.email;
+    return identity ? `${identity}:${user.role || ""}` : "";
+  } catch {
+    return "";
   }
 }
 
@@ -77,13 +97,40 @@ export async function api(path, options = {}) {
   if (!(options.body instanceof FormData)) headers["Content-Type"] = "application/json";
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
-  const response = await fetch(`${API_URL}${path}`, { ...options, headers });
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const error = new Error(data.detail || "RedHero request failed");
-    error.data = data;
-    throw error;
+
+  const cacheScope = method === "GET" ? currentCacheScope() : "";
+  const cacheKey = cacheScope ? `${cacheScope}:${path}` : "";
+  if (cacheKey) {
+    const cached = getCache.get(cacheKey);
+    if (cached && Date.now() - cached.createdAt < GET_CACHE_TTL_MS) return cached.data;
+    if (cached) getCache.delete(cacheKey);
+    const pending = inFlightGets.get(cacheKey);
+    if (pending) return pending;
   }
+
+  const request = fetch(`${API_URL}${path}`, { ...options, headers }).then(async (response) => {
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const error = new Error(data.detail || "RedHero request failed");
+      error.data = data;
+      throw error;
+    }
+    return data;
+  });
+
+  if (cacheKey) {
+    inFlightGets.set(cacheKey, request);
+    try {
+      const data = await request;
+      getCache.set(cacheKey, { createdAt: Date.now(), data });
+      return data;
+    } finally {
+      inFlightGets.delete(cacheKey);
+    }
+  }
+
+  const data = await request;
+  if (method !== "GET") clearApiCache();
   return data;
 }
 

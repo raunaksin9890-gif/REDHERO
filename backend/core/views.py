@@ -3,6 +3,7 @@ import io
 import logging
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import unquote, urlparse
@@ -247,6 +248,18 @@ def dashboard_raw_rows(model, query, expected_fields, context):
                 ", ".join(extra_fields),
             )
     return rows
+
+
+def dashboard_parallel(tasks):
+    if len(tasks) == 1:
+        return [tasks[0]()]
+    with ThreadPoolExecutor(max_workers=min(len(tasks), 8)) as executor:
+        futures = [executor.submit(task) for task in tasks]
+        return [future.result() for future in futures]
+
+
+def dashboard_count(model):
+    return model.objects.count()
 
 
 def dashboard_float(value, default=0.0):
@@ -853,58 +866,77 @@ def teacher_detail(request, teacher_id):
 def dashboard(request):
     user = current_user(request)
     if user.role == ROLE_ADMIN:
+        count_models = [Student, Teacher, Note, Video, Assignment, Blog, Attendance, Marks]
+        dashboard_tasks = [lambda model=model: dashboard_count(model) for model in count_models]
+        dashboard_tasks.append(lambda: list(Notice.objects.order_by("-created_at")[:5]))
+        dashboard_results = dashboard_parallel(dashboard_tasks)
+        counts, recent_notices = dashboard_results[:-1], dashboard_results[-1]
         return ok(
             {
-                "total_students": Student.objects.count(),
-                "total_teachers": Teacher.objects.count(),
-                "total_notes": Note.objects.count(),
-                "total_videos": Video.objects.count(),
-                "total_assignments": Assignment.objects.count(),
-                "total_blogs": Blog.objects.count(),
-                "attendance_records": Attendance.objects.count(),
-                "marks_records": Marks.objects.count(),
-                "recent_notices": [notice_json(row) for row in Notice.objects.order_by("-created_at")[:5]],
+                "total_students": counts[0],
+                "total_teachers": counts[1],
+                "total_notes": counts[2],
+                "total_videos": counts[3],
+                "total_assignments": counts[4],
+                "total_blogs": counts[5],
+                "attendance_records": counts[6],
+                "marks_records": counts[7],
+                "recent_notices": [notice_json(row) for row in recent_notices],
             }
         )
     if user.role == ROLE_TEACHER:
         teacher = get_teacher_for_user(user)
         assigned = teacher.assigned_classes if teacher else []
+        students_count, recent_notices = dashboard_parallel(
+            [
+                lambda: Student.objects(class_level__in=assigned).count(),
+                lambda: list(Notice.objects(class_level__in=assigned + ["all"]).order_by("-created_at")[:5]),
+            ]
+        )
         return ok(
             {
                 "profile": teacher_json(teacher),
                 "assigned_classes": assigned,
-                "students": Student.objects(class_level__in=assigned).count(),
-                "recent_notices": [notice_json(row) for row in Notice.objects(class_level__in=assigned + ["all"]).order_by("-created_at")[:5]],
+                "students": students_count,
+                "recent_notices": [notice_json(row) for row in recent_notices],
             }
-    )
+        )
     student = get_student_for_user(user)
     if not student:
         return bad("Student profile not found", status.HTTP_404_NOT_FOUND)
     maybe_auto_update_current_affairs(target_count=8)
-    attendance = dashboard_raw_rows(
-        Attendance,
-        dashboard_student_query(student),
-        DASHBOARD_ATTENDANCE_FIELDS,
-        f"student {student.id}",
+    attendance, marks, notices, current_affairs, recent_videos, streak, leaderboard_data = dashboard_parallel(
+        [
+            lambda: dashboard_raw_rows(
+                Attendance,
+                dashboard_student_query(student),
+                DASHBOARD_ATTENDANCE_FIELDS,
+                f"student {student.id}",
+            ),
+            lambda: dashboard_raw_rows(
+                Marks,
+                dashboard_student_query(student),
+                DASHBOARD_MARKS_FIELDS,
+                f"student {student.id}",
+            ),
+            lambda: list(Notice.objects(class_level__in=[student.class_level, "all"]).order_by("-created_at")[:5]),
+            lambda: list(CurrentAffair.objects.order_by("-published_on")[:4]),
+            lambda: list(Video.objects(class_level=student.class_level).order_by("-created_at")[:4]),
+            lambda: practice_streak_json(student),
+            lambda: class_leaderboard(student.class_level, current_student=student),
+        ]
     )
     present = len([row for row in attendance if row.get("status") == "present"])
-    marks = dashboard_raw_rows(
-        Marks,
-        dashboard_student_query(student),
-        DASHBOARD_MARKS_FIELDS,
-        f"student {student.id}",
-    )
-    notices = Notice.objects(class_level__in=[student.class_level, "all"]).order_by("-created_at")[:5]
-    leaderboard, leaderboard_rank = class_leaderboard(student.class_level, current_student=student)
+    leaderboard, leaderboard_rank = leaderboard_data
     return ok(
         {
             "profile": student_json(student),
             "attendance_percentage": round((present / len(attendance)) * 100, 2) if attendance else 0,
             "marks": [dashboard_marks_json(row, student) for row in marks[-5:]],
             "latest_notices": [notice_json(row) for row in notices],
-            "current_affairs": [simple_json(row, ["title", "summary", "category", "image_url", "published_on"]) for row in CurrentAffair.objects.order_by("-published_on")[:4]],
-            "recent_videos": [simple_json(row, ["title", "class_level", "subject", "chapter", "youtube_url", "file_name", "file_type", "file_size"]) for row in Video.objects(class_level=student.class_level).order_by("-created_at")[:4]],
-            "study_streak": practice_streak_json(student),
+            "current_affairs": [simple_json(row, ["title", "summary", "category", "image_url", "published_on"]) for row in current_affairs],
+            "recent_videos": [simple_json(row, ["title", "class_level", "subject", "chapter", "youtube_url", "file_name", "file_type", "file_size"]) for row in recent_videos],
+            "study_streak": streak,
             "leaderboard": leaderboard,
             "leaderboard_class": student.class_level,
             "leaderboard_rank": leaderboard_rank,
@@ -947,8 +979,16 @@ def global_search(request):
         if teacher and teacher.subjects:
             question_query = question_query(subject__in=teacher.subjects)
 
+    student_rows, note_rows, notice_rows, question_rows = dashboard_parallel(
+        [
+            lambda: list(student_query.order_by("name")[:5]),
+            lambda: list(note_query.order_by("-created_at")[:5]),
+            lambda: list(notice_query.order_by("-created_at")[:5]),
+            lambda: list(question_query.order_by("-created_at")[:5]),
+        ]
+    )
     results = []
-    for student in student_query.order_by("name")[:5]:
+    for student in student_rows:
         results.append(
             {
                 "id": str(student.id),
@@ -958,7 +998,7 @@ def global_search(request):
                 "path": "/directory" if user.role != ROLE_STUDENT else "",
             }
         )
-    for note in note_query.order_by("-created_at")[:5]:
+    for note in note_rows:
         results.append(
             {
                 "id": str(note.id),
@@ -968,7 +1008,7 @@ def global_search(request):
                 "path": f"/learning/notes/{note.id}",
             }
         )
-    for notice in notice_query.order_by("-created_at")[:5]:
+    for notice in notice_rows:
         results.append(
             {
                 "id": str(notice.id),
@@ -978,7 +1018,7 @@ def global_search(request):
                 "path": f"/learning/notice-board/{notice.id}",
             }
         )
-    for question in question_query.order_by("-created_at")[:5]:
+    for question in question_rows:
         results.append(
             {
                 "id": str(question.id),
