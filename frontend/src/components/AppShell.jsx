@@ -407,6 +407,7 @@ const notificationIcons = {
 };
 
 function mapNotification(item) {
+  const createdAt = parseNotificationDate(item.created_at);
   return {
     id: item.id,
     title: item.title,
@@ -415,14 +416,19 @@ function mapNotification(item) {
     tone: item.tone || "red",
     icon: notificationIcons[item.icon] || notificationIcons[item.type] || Bell,
     read: Boolean(item.read ?? item.is_read),
-    group: groupNotification(item.created_at),
-    time: timeAgo(item.created_at),
+    group: groupNotification(createdAt),
+    time: timeAgo(createdAt),
   };
 }
 
-function groupNotification(value) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "Older";
+function parseNotificationDate(value) {
+  if (!value) return null;
+  const date = value instanceof Date ? value : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function groupNotification(date) {
+  if (!date) return "Older";
   const today = new Date();
   const startToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
   const startYesterday = new Date(startToday);
@@ -432,16 +438,14 @@ function groupNotification(value) {
   return "Older";
 }
 
-function timeAgo(value) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
-  const seconds = Math.max(1, Math.floor((Date.now() - date.getTime()) / 1000));
-  if (seconds < 60) return "Now";
+function timeAgo(date) {
+  if (!date) return "";
+  const seconds = Math.max(0, Math.floor((Date.now() - date.getTime()) / 1000));
+  if (seconds < 60) return "Just now";
   const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes} min ago`;
+  if (minutes < 60) return `${minutes} minute${minutes === 1 ? "" : "s"} ago`;
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours} hr ago`;
+  if (hours < 24) return `${hours} hour${hours === 1 ? "" : "s"} ago`;
   const days = Math.floor(hours / 24);
-  if (days === 1) return "Yesterday";
-  return `${days} days ago`;
+  return `${days} day${days === 1 ? "" : "s"} ago`;
 }

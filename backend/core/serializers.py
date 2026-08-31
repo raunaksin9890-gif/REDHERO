@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 def oid(value):
@@ -7,6 +7,15 @@ def oid(value):
 
 def dt(value):
     return value.isoformat() if value else None
+
+
+def notification_dt(value):
+    """Serialize legacy naive MongoEngine UTC dates with an explicit offset."""
+    if not value:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.isoformat()
 
 
 def user_json(user):
@@ -117,8 +126,8 @@ def notification_json(row):
         "is_read": row.is_read,
         "read": row.is_read,
         "dismissed": row.dismissed,
-        "created_at": dt(row.created_at),
-        "updated_at": dt(row.updated_at),
+        "created_at": notification_dt(row.created_at),
+        "updated_at": notification_dt(row.updated_at),
     }
 
 
