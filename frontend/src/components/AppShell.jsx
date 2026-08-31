@@ -3,6 +3,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 import { api } from "../api/client.js";
 import { useAuth } from "./AuthProvider.jsx";
+import { useExamAttempt } from "./ExamAttemptContext.jsx";
+import { FloatingAiAssistant } from "./FloatingAiAssistant.jsx";
 import { ThemeToggle } from "./ThemeProvider.jsx";
 
 const links = [
@@ -20,7 +22,8 @@ export function AppShell() {
   const [collapsed, setCollapsed] = useState(false);
   const navigate = useNavigate();
   const location = useLocation();
-  const visibleLinks = links.filter((link) => link.roles.includes(user.role));
+  const { activeAttemptId } = useExamAttempt();
+  const visibleLinks = links.filter((link) => link.roles.includes(user.role) && !(link.to === "/ai-tutor" && activeAttemptId));
 
   useEffect(() => {
     setOpen(false);
@@ -119,6 +122,7 @@ export function AppShell() {
           <Outlet />
         </div>
       </main>
+      <FloatingAiAssistant user={user} />
     </div>
   );
 }

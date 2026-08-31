@@ -29,6 +29,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 import { API_URL, api, getToken } from "../api/client.js";
 import { useAuth } from "../components/AuthProvider.jsx";
+import { useExamAttempt } from "../components/ExamAttemptContext.jsx";
 import { AnimatedValue, ConfirmDialog, EmptyState, LoadingOverlay, useToast } from "../components/UX.jsx";
 
 const MODULES = [
@@ -49,6 +50,7 @@ export function Operations() {
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState(false);
   const toast = useToast();
+  const { setActiveExamAttempt } = useExamAttempt();
 
   async function load() {
     try {
@@ -64,6 +66,11 @@ export function Operations() {
         user.role === "super_admin" ? api("/attendance/audit/") : Promise.resolve({ results: [] }),
       ];
       const [attendance, marks, assignments, exams, timetables, fees, students, audit] = await Promise.all(requests);
+      const examRows = exams.results || [];
+      const activeAttempt = user.role === "student"
+        ? examRows.find((item) => item.attempt?.status === "in_progress" && !item.attempt?.submitted_at)?.attempt
+        : null;
+      setActiveExamAttempt(activeAttempt?.id || null);
       setData({
         attendance: attendance.results || [],
         marks: marks.results || [],
@@ -770,6 +777,7 @@ function StudentExamCard({ exam, onSaved, setMessage }) {
   const [startPreview, setStartPreview] = useState(false);
   const [attempt, setAttempt] = useState(exam.attempt);
   const [activeExam, setActiveExam] = useState(exam);
+  const { setActiveExamAttempt, clearExamAttempt } = useExamAttempt();
   async function start() {
     requestExamFullscreen().catch(() => {
       setMessage("Fullscreen is recommended for exams. Continue only on the exam screen.");
@@ -779,9 +787,11 @@ function StudentExamCard({ exam, onSaved, setMessage }) {
       setAttempt(data.attempt);
       setActiveExam(data.exam);
       if (data.attempt?.submitted_at) {
+        clearExamAttempt(data.attempt.id);
         setMessage(data.attempt.auto_submitted ? "Your exam was automatically submitted because you left the exam screen." : "This exam has already been submitted.");
         onSaved();
       } else {
+        setActiveExamAttempt(data.attempt.id);
         setTaking(true);
       }
     } catch {
@@ -848,7 +858,16 @@ function ExamTakingPanel({ exam, attempt, setAttempt, setMessage, onSaved }) {
   const violationHandled = useRef(false);
   const lastSaved = useRef(Object.fromEntries((attempt.answers || []).map((answer) => [answer.question_id, answer.answer])));
   const submitted = Boolean(attempt.submitted_at || attempt.status !== "in_progress");
+  const { setActiveExamAttempt, clearExamAttempt } = useExamAttempt();
   const question = (exam.questions || [])[index];
+  useEffect(() => {
+    if (submitted) {
+      clearExamAttempt(attempt.id);
+      return undefined;
+    }
+    setActiveExamAttempt(attempt.id);
+    return undefined;
+  }, [attempt.id, clearExamAttempt, setActiveExamAttempt, submitted]);
   useEffect(() => {
     if (submitted) return undefined;
     const timer = window.setInterval(() => {

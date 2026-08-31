@@ -36,6 +36,7 @@ from .models import (
     CLASSES,
     ContactMessage,
     CurrentAffair,
+    ExamAttempt,
     Fee,
     Marks,
     Note,
@@ -2115,6 +2116,8 @@ def ai_chat(request):
     student = get_student_for_user(user)
     if not student:
         return bad("Student profile is not configured", status.HTTP_404_NOT_FOUND)
+    if ExamAttempt.objects(student=student, status="in_progress").first():
+        return bad("AI Tutor is unavailable during an active exam.", status.HTTP_403_FORBIDDEN)
     if request.method == "GET":
         rows = ChatHistory.objects(student=student).order_by("-updated_at")
         return ok({"results": [{"id": str(row.id), "subject": row.subject, "messages": [msg.to_mongo().to_dict() for msg in row.messages]} for row in rows]})

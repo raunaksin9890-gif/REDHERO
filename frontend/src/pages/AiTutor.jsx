@@ -38,6 +38,46 @@ function MarkdownMessage({ content }) {
 }
 
 export function AiTutor() {
+  const tutor = useAiTutorChat();
+
+  return (
+    <section className="ai-tutor-page">
+      <div className="ai-hero">
+        <div>
+          <span className="ai-kicker"><Sparkles size={15} /> RedHero intelligence</span>
+          <h1>AI Tutor</h1>
+          <div className="ai-kinetic" aria-hidden="true">
+            <span>Explain clearly</span>
+            <span>Solve step by step</span>
+            <span>Revise faster</span>
+          </div>
+          <p>Ask Maths, Science, English, or Social Science questions.</p>
+        </div>
+        <div className="ai-orb-wrap" aria-hidden="true">
+          <div className="ai-orb"><Bot size={42} /></div>
+        </div>
+      </div>
+
+      <div className="ai-layout">
+        <aside className="ai-learning-cards" aria-label="AI learning cards">
+          <InfoCard icon={MessageCircle} title="Recent conversations" value={tutor.chat.length} />
+          <InfoCard icon={Lightbulb} title="Suggested learning" value={tutor.subject} />
+          <InfoCard icon={BookOpen} title="Quick revision" value="Ready" />
+          <InfoCard icon={PenTool} title="Practice questions" value="Ask now" />
+        </aside>
+
+        <AiTutorChatView {...tutor} />
+      </div>
+    </section>
+  );
+}
+
+export function AiTutorChat({ showHeader = true }) {
+  const tutor = useAiTutorChat();
+  return <AiTutorChatView {...tutor} showHeader={showHeader} />;
+}
+
+function useAiTutorChat() {
   const [subject, setSubject] = useState("Mathematics");
   const [message, setMessage] = useState("");
   const [chat, setChat] = useState([]);
@@ -73,37 +113,18 @@ export function AiTutor() {
   function handleMessageKeyDown(event) {
     if (event.key !== "Enter" || event.shiftKey) return;
     if (event.isComposing || event.nativeEvent?.isComposing || event.keyCode === 229) return;
-    submit(event);
+      submit(event);
   }
 
+  return { subject, setSubject, message, setMessage, chat, busy, submit, handleMessageKeyDown };
+}
+
+function AiTutorChatView({ subject, setSubject, message, setMessage, chat, busy, submit, handleMessageKeyDown, showHeader = true }) {
   return (
-    <section className="ai-tutor-page">
+    <>
       <style>{aiTutorPremiumStyles}</style>
-      <div className="ai-hero">
-        <div>
-          <span className="ai-kicker"><Sparkles size={15} /> RedHero intelligence</span>
-          <h1>AI Tutor</h1>
-          <div className="ai-kinetic" aria-hidden="true">
-            <span>Explain clearly</span>
-            <span>Solve step by step</span>
-            <span>Revise faster</span>
-          </div>
-          <p>Ask Maths, Science, English, or Social Science questions.</p>
-        </div>
-        <div className="ai-orb-wrap" aria-hidden="true">
-          <div className="ai-orb"><Bot size={42} /></div>
-        </div>
-      </div>
-
-      <div className="ai-layout">
-        <aside className="ai-learning-cards" aria-label="AI learning cards">
-          <InfoCard icon={MessageCircle} title="Recent conversations" value={chat.length} />
-          <InfoCard icon={Lightbulb} title="Suggested learning" value={subject} />
-          <InfoCard icon={BookOpen} title="Quick revision" value="Ready" />
-          <InfoCard icon={PenTool} title="Practice questions" value="Ask now" />
-        </aside>
-
-        <div className="chat-panel ai-chat-panel">
+      <div className="chat-panel ai-chat-panel">
+        {showHeader && (
           <header>
             <div className="chat-title-icon"><BrainCircuit size={24} /></div>
             <div>
@@ -111,45 +132,45 @@ export function AiTutor() {
               <p>Ask Maths, Science, English, or Social Science questions.</p>
             </div>
           </header>
+        )}
 
-          <div className="prompt-suggestions">
-            {["Explain today's topic", "Solve this problem", "Create notes", "Generate quiz", "Summarize lecture"].map((prompt) => (
-              <button key={prompt} type="button" onClick={() => setMessage(prompt)}>{prompt}</button>
-            ))}
-          </div>
-
-          <div className="chat-window">
-            {chat.map((item, index) => (
-              <div className={`bubble ${item.role}`} key={`${item.role}-${index}`}>
-                {item.role === "assistant" ? <MarkdownMessage content={item.content} /> : item.content}
-              </div>
-            ))}
-            {busy && (
-              <div className="bubble assistant typing-bubble">
-                <span /><span /><span />
-              </div>
-            )}
-            {chat.length === 0 && <div className="empty ai-empty"><FileText size={22} /> Your class tutor is ready.</div>}
-          </div>
-          <form className="chat-form" onSubmit={submit}>
-            <select value={subject} onChange={(event) => setSubject(event.target.value)}>
-              <option>Mathematics</option>
-              <option>Science</option>
-              <option>English</option>
-              <option>Social Science</option>
-            </select>
-            <textarea
-              value={message}
-              onChange={(event) => setMessage(event.target.value)}
-              onKeyDown={handleMessageKeyDown}
-              placeholder="Type your question"
-              rows={1}
-            />
-            <button className="icon-button" disabled={busy} title="Send"><Send size={18} /></button>
-          </form>
+        <div className="prompt-suggestions">
+          {["Explain today's topic", "Solve this problem", "Create notes", "Generate quiz", "Summarize lecture"].map((prompt) => (
+            <button key={prompt} type="button" onClick={() => setMessage(prompt)}>{prompt}</button>
+          ))}
         </div>
+
+        <div className="chat-window">
+          {chat.map((item, index) => (
+            <div className={`bubble ${item.role}`} key={`${item.role}-${index}`}>
+              {item.role === "assistant" ? <MarkdownMessage content={item.content} /> : item.content}
+            </div>
+          ))}
+          {busy && (
+            <div className="bubble assistant typing-bubble">
+              <span /><span /><span />
+            </div>
+          )}
+          {chat.length === 0 && <div className="empty ai-empty"><FileText size={22} /> Your class tutor is ready.</div>}
+        </div>
+        <form className="chat-form" onSubmit={submit}>
+          <select value={subject} onChange={(event) => setSubject(event.target.value)}>
+            <option>Mathematics</option>
+            <option>Science</option>
+            <option>English</option>
+            <option>Social Science</option>
+          </select>
+          <textarea
+            value={message}
+            onChange={(event) => setMessage(event.target.value)}
+            onKeyDown={handleMessageKeyDown}
+            placeholder="Type your question"
+            rows={1}
+          />
+          <button className="icon-button" disabled={busy} title="Send"><Send size={18} /></button>
+        </form>
       </div>
-    </section>
+    </>
   );
 }
 

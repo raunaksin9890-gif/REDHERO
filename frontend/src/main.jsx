@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { Navigate, Route, BrowserRouter as Router, Routes } from "react-router-dom";
 import { AppShell } from "./components/AppShell.jsx";
 import { AuthProvider, useAuth } from "./components/AuthProvider.jsx";
+import { ExamAttemptProvider, useExamAttempt } from "./components/ExamAttemptContext.jsx";
 import { ThemeProvider } from "./components/ThemeProvider.jsx";
 import { LoadingOverlaySuppressor, LogoLoadingOverlay, PageLoader, RouteMessage, ToastProvider } from "./components/UX.jsx";
 import { Login } from "./pages/Login.jsx";
@@ -22,7 +23,7 @@ function Protected({ children }) {
   if (loading) return null;
   if (!user) return <Navigate to="/login" replace />;
   if (user.first_login || user.force_password_change) return <Navigate to="/change-password" replace />;
-  return children;
+  return <ExamAttemptProvider>{children}</ExamAttemptProvider>;
 }
 
 function App() {
@@ -64,7 +65,7 @@ function AppContent() {
                 <Route path="learning/:sectionSlug/:itemId" element={<Learning />} />
                 <Route path="operations" element={<Operations />} />
                 <Route path="practice-progress" element={<PracticeProgress />} />
-                <Route path="ai-tutor" element={<AiTutor />} />
+                <Route path="ai-tutor" element={<AiTutorRoute />} />
                 <Route path="contact-us" element={<ContactUs />} />
               </Route>
               <Route path="*" element={<RouteMessage code="404" title="Page not found" message="The page you opened is not available in this portal." />} />
@@ -75,6 +76,11 @@ function AppContent() {
       </LoadingOverlaySuppressor>
     </>
   );
+}
+
+function AiTutorRoute() {
+  const { activeAttemptId } = useExamAttempt();
+  return activeAttemptId ? <Navigate to="/operations" replace /> : <AiTutor />;
 }
 
 function InitialLogoSplash({ onActiveChange }) {
