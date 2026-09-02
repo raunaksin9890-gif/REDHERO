@@ -69,7 +69,13 @@ export function Dashboard() {
         <AnnouncementBanner notices={data.recent_notices} />
         <NoticeList notices={data.recent_notices} />
         <Stat index={0} icon={UsersRound} label="Assigned Students" value={data.students} trend="Your classes" />
-        <Stat index={1} icon={BookOpen} label="Assigned Classes" value={data.assigned_classes?.join(", ") || "-"} trend="Current access" />
+        <Stat
+  index={1}
+  icon={BookOpen}
+  label="Assigned Classes"
+  value={<>{data.assigned_classes?.join(", ") || "-"}</>}
+  trend="Current access"
+/>
       </div>
     );
   }
